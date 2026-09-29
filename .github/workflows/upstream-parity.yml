@@ -1,0 +1,139 @@
+name: Upstream parity
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+  schedule:
+    - cron: "17 2 * * *"
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: upstream-parity
+  cancel-in-progress: true
+
+env:
+  PARITY_ISSUE_TITLE: "Automated upstream parity failure"
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  rebase-test-promote:
+    # A scheduled rebase pushes the rewritten patch stack with GITHUB_TOKEN.
+    # Do not immediately build the exact same result a second time.
+    if: github.event_name != 'push' || github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          # We carry only three commits. Avoid fetching every historical Cargo
+          # release branch and tag just to rebase this tiny downstream stack.
+          fetch-depth: 16
+          fetch-tags: false
+
+      - name: Configure Git
+        run: |
+          git config user.name "cargo-ephemeral parity bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/rust-lang/cargo.git
+          git fetch --no-tags --depth=512 upstream master
+          echo "OLD_HEAD=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          echo "UPSTREAM_HEAD=$(git rev-parse upstream/master)" >> "$GITHUB_ENV"
+
+      - name: Rebase carried patch
+        run: git rebase upstream/master
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt
+          rustup default stable
+
+      - name: Diff sanity
+        run: |
+          git diff --check upstream/master...HEAD
+          commits=$(git rev-list --count upstream/master..HEAD)
+          files=$(git diff --name-only upstream/master...HEAD | wc -l)
+          echo "carried commits: $commits"
+          echo "changed files: $files"
+          test "$commits" -le 8
+          test "$files" -le 12
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Wrapper concurrency smoke
+        run: ci/test-cargo-ephemeral-wrapper
+
+      - name: Focused regression test
+        run: CARGO_TEST_DISABLE_NIGHTLY=1 cargo test --test testsuite registry_source_can_be_ephemeral
+
+      - name: Workspace check
+        run: cargo check --workspace --all-targets
+
+      - name: Build release binary
+        run: |
+          cargo build --release --locked --bin cargo
+          echo "CANDIDATE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          {
+            echo "fork_sha=$(git rev-parse HEAD)"
+            echo "upstream_sha=$(git rev-parse upstream/master)"
+          } > cargo-ephemeral-build.txt
+
+      - name: Upload release binary
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: cargo-ephemeral-linux-x86_64
+          path: |
+            target/release/cargo
+            cargo-ephemeral-build.txt
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Promote rebased branch
+        run: |
+          new_head=$(git rev-parse HEAD)
+          if [ "$new_head" != "$OLD_HEAD" ]; then
+            git push --force-with-lease=master:"$OLD_HEAD" origin HEAD:master
+          fi
+
+      - name: Close recovered parity issue
+        if: success()
+        run: |
+          issue=$(gh api "repos/$GITHUB_REPOSITORY/issues?state=open&per_page=100" |
+            jq -r --arg title "$PARITY_ISSUE_TITLE" '.[] | select(.pull_request | not) | select(.title == $title) | .number' |
+            head -n1)
+          if [ -n "$issue" ]; then
+            jq -n --arg body "Parity recovered at upstream $UPSTREAM_HEAD in run $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID." '{body:$body}' |
+              gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$issue/comments" --input -
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/$issue" -f state=closed >/dev/null
+          fi
+
+      - name: Report parity failure
+        if: failure()
+        run: |
+          git rebase --abort >/dev/null 2>&1 || true
+          {
+            echo "Daily upstream parity failed."
+            echo
+            echo "- Upstream: ${UPSTREAM_HEAD:-unknown}"
+            echo "- Fork before run: ${OLD_HEAD:-unknown}"
+            echo "- Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo
+            echo "An agent should preserve only the semantics documented in EPHEMERAL_REGISTRY.md; upstream wins everywhere else."
+          } > /tmp/parity-issue.md
+          issue=$(gh api "repos/$GITHUB_REPOSITORY/issues?state=open&per_page=100" |
+            jq -r --arg title "$PARITY_ISSUE_TITLE" '.[] | select(.pull_request | not) | select(.title == $title) | .number' |
+            head -n1)
+          if [ -n "$issue" ]; then
+            jq -n --rawfile body /tmp/parity-issue.md '{body:$body}' |
+              gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$issue/comments" --input -
+          else
+            jq -n --arg title "$PARITY_ISSUE_TITLE" --rawfile body /tmp/parity-issue.md '{title:$title,body:$body}' |
+              gh api --method POST "repos/$GITHUB_REPOSITORY/issues" --input -
+          fi
