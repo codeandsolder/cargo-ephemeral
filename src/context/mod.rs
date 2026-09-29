@@ -478,9 +478,19 @@ impl GlobalContext {
         self.registry_base_path().join("cache")
     }
 
-    /// Gets the Cargo registry source directory (`<cargo_home>/registry/src`).
+    /// Gets the Cargo registry source directory.
+    ///
+    /// If `EPHEMERAL_CARGO_REGISTRY_SRC` is set, registry packages are extracted
+    /// below that directory instead of `<cargo_home>/registry/src`. The caller
+    /// owns the lifetime of the override directory. This lets a wrapper keep
+    /// Cargo's verified `.crate` cache persistent while making extracted source
+    /// process-scoped scratch.
     pub fn registry_source_path(&self) -> Filesystem {
-        self.registry_base_path().join("src")
+        if let Some(path) = self.env.get_env_os("EPHEMERAL_CARGO_REGISTRY_SRC") {
+            Filesystem::new(PathBuf::from(path))
+        } else {
+            self.registry_base_path().join("src")
+        }
     }
 
     /// Gets the default Cargo registry.
@@ -549,6 +559,13 @@ impl GlobalContext {
     pub fn cargo_exe(&self) -> CargoResult<&Path> {
         self.cargo_exe
             .try_borrow_with(|| {
+                // The ephemeral-registry deployment may invoke a real Cargo binary
+                // through a site wrapper. External subcommands call back through
+                // `$CARGO`; let the wrapper explicitly remain that callback target.
+                if let Some(wrapper) = self.get_env_os("EPHEMERAL_CARGO_WRAPPER") {
+                    return Ok(PathBuf::from(wrapper));
+                }
+
                 let from_env = || -> CargoResult<PathBuf> {
                     // Try re-using the `cargo` set in the environment already. This allows
                     // commands that use Cargo as a library to inherit (via `cargo <subcommand>`)
@@ -2102,7 +2119,11 @@ impl GlobalContext {
             "package cache lock is not currently held, Cargo forgot to call \
              `acquire_package_cache_lock` before we got to this stack frame",
         );
-        assert!(ret.starts_with(self.home_path.as_path_unlocked()));
+        let registry_source_path = self.registry_source_path();
+        assert!(
+            ret.starts_with(self.home_path.as_path_unlocked())
+                || ret.starts_with(registry_source_path.as_path_unlocked())
+        );
         ret
     }
 
