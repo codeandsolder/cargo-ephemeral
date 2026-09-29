@@ -33,3 +33,16 @@ Upstream wins on every unrelated behavior. The carried semantic invariant is:
 The scheduled parity workflow rebases this branch onto rust-lang/cargo master,
 runs the focused regression test and a workspace check, and only then updates
 the branch. Failures are reported through one idempotent GitHub issue.
+
+## Downstream CI policy
+
+The fork also intentionally carries a low-cost CI policy. Routine pull-request
+checks keep the primary Linux x86-64-v2 stable lane rather than reproducing
+upstream's full OS/toolchain matrix. macOS, Windows, ARM, beta/nightly, MSRV,
+build-std, docs, and timing compatibility work is reserved for release tags or
+explicit/manual compatibility runs where applicable. Upstream-only audit and
+Pages deployment jobs are skipped in this fork.
+
+These CI changes are deliberate downstream policy, not rebase noise. An
+automated parity repair must preserve both this section and the ephemeral
+registry-source invariants above while otherwise preferring upstream behavior.

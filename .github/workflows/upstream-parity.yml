@@ -125,7 +125,7 @@ jobs:
             echo "- Fork before run: ${OLD_HEAD:-unknown}"
             echo "- Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             echo
-            echo "An agent should preserve only the semantics documented in EPHEMERAL_REGISTRY.md; upstream wins everywhere else."
+            echo "An agent should preserve the ephemeral-registry semantics and downstream CI policy documented in EPHEMERAL_REGISTRY.md; upstream wins everywhere else."
           } > /tmp/parity-issue.md
           issue=$(gh api "repos/$GITHUB_REPOSITORY/issues?state=open&per_page=100" |
             jq -r --arg title "$PARITY_ISSUE_TITLE" '.[] | select(.pull_request | not) | select(.title == $title) | .number' |
