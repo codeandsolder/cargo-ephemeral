@@ -414,6 +414,14 @@ fn cargo_subcommand_env() {
         .env(cargo::CARGO_ENV, &envtest_bin)
         .with_stdout_data(format!("{}\n", cargo.display()).raw())
         .run();
+
+    // Downstream wrappers can deliberately remain the callback target for
+    // external subcommands without changing upstream `$CARGO` precedence.
+    cargo_process("envtest")
+        .env("PATH", &path)
+        .env("EPHEMERAL_CARGO_WRAPPER", &envtest_bin)
+        .with_stdout_data(format!("{}\n", envtest_bin).raw())
+        .run();
 }
 
 #[cargo_test]
