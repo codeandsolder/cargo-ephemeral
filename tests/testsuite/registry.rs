@@ -107,6 +107,79 @@ fn simple(pre_clean_expected: impl IntoData, post_clean_expected: impl IntoData)
 }
 
 #[cargo_test]
+fn registry_source_can_be_ephemeral() {
+    let p = project()
+        .file(
+            "Cargo.toml",
+            r#"
+                [package]
+                name = "foo"
+                version = "0.0.1"
+                edition = "2015"
+
+                [dependencies]
+                bar = "0.0.1"
+            "#,
+        )
+        .file("src/main.rs", "fn main() {}")
+        .build();
+
+    Package::new("bar", "0.0.1").publish();
+
+    let ephemeral_src = p.root().join("ephemeral-registry-src");
+    p.cargo("check")
+        .env("EPHEMERAL_CARGO_REGISTRY_SRC", &ephemeral_src)
+        .run();
+
+    assert!(
+        glob::glob(
+            ephemeral_src
+                .join("*/bar-0.0.1/src/lib.rs")
+                .to_str()
+                .unwrap()
+        )
+        .unwrap()
+        .next()
+        .is_some()
+    );
+    assert!(!paths::cargo_home().join("registry/src").exists());
+    assert!(
+        glob::glob(
+            paths::cargo_home()
+                .join("registry/cache/*/bar-0.0.1.crate")
+                .to_str()
+                .unwrap()
+        )
+        .unwrap()
+        .next()
+        .is_some()
+    );
+
+    // The source tree is disposable. Recreate it from the retained .crate at
+    // the same path and verify that doing so does not invalidate an existing
+    // target/fingerprint cache.
+    ephemeral_src.rm_rf();
+    p.cargo("check")
+        .arg("--offline")
+        .env("EPHEMERAL_CARGO_REGISTRY_SRC", &ephemeral_src)
+        .with_stderr_does_not_contain("[CHECKING]")
+        .run();
+
+    assert!(
+        glob::glob(
+            ephemeral_src
+                .join("*/bar-0.0.1/src/lib.rs")
+                .to_str()
+                .unwrap()
+        )
+        .unwrap()
+        .next()
+        .is_some()
+    );
+    assert!(!paths::cargo_home().join("registry/src").exists());
+}
+
+#[cargo_test]
 fn deps_http() {
     let _server = setup_http();
     deps(str![[r#"
