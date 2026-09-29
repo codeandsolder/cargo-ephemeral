@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+real_cargo="${EPHEMERAL_CARGO_REAL_CARGO:-/usr/local/libexec/cargo-ephemeral-bin}"
+scratch_base="${EPHEMERAL_CARGO_TMPDIR:-${TMPDIR:-/tmp}/cargo-ephemeral-registry}"
+
+cargo_args=("$@")
+if (( ${#cargo_args[@]} )) && [[ "${cargo_args[0]}" == +* ]]; then
+    export RUSTUP_TOOLCHAIN="${cargo_args[0]#+}"
+    cargo_args=("${cargo_args[@]:1}")
+fi
+
+# Keep external subcommands (for example cargo-clippy) inside the wrapper when
+# they call back through the standard CARGO environment variable.
+export EPHEMERAL_CARGO_WRAPPER="${EPHEMERAL_CARGO_WRAPPER_PATH:-$(readlink -f "$0")}"
+export CARGO="$EPHEMERAL_CARGO_WRAPPER"
+source_slot="$scratch_base/uid-$(id -u)"
+source_root="$source_slot/src"
+lock_path="$source_slot/.active.lock"
+
+mkdir -p -- "$source_slot"
+exec 8>"$lock_path"
+flock -s 8
+mkdir -p -- "$source_root"
+
+export EPHEMERAL_CARGO_REGISTRY_SRC="$source_root"
+
+cleanup() {
+    rc=$?
+    flock -u 8 2>/dev/null || true
+    if flock -n -x 8; then
+        rm -rf -- "$source_root" 2>/dev/null || true
+        flock -u 8 2>/dev/null || true
+    fi
+    exit "$rc"
+}
+trap cleanup EXIT HUP INT TERM
+
+"$real_cargo" "${cargo_args[@]}"
