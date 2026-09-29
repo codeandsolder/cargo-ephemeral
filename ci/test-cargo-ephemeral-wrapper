@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/cargo-ephemeral-test.XXXXXXXX")"
+p1=""
+p2=""
+cleanup() {
+    for pid in "$p1" "$p2"; do
+        if [[ -n "$pid" ]]; then
+            kill "$pid" 2>/dev/null || true
+            wait "$pid" 2>/dev/null || true
+        fi
+    done
+    rm -rf -- "$root"
+}
+trap cleanup EXIT HUP INT TERM
+
+mkdir -p "$root/bin" "$root/ready" "$root/release"
+: > "$root/toolchains"
+: > "$root/cargo-env"
+
+cat > "$root/bin/fake-cargo" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+name="${1:-default}"
+mkdir -p -- "$EPHEMERAL_CARGO_REGISTRY_SRC"
+printf '%s\n' "$EPHEMERAL_CARGO_REGISTRY_SRC" >> "$CAPTURE_FILE"
+printf '%s\t%s\n' "$name" "${RUSTUP_TOOLCHAIN:-}" >> "$TOOLCHAIN_CAPTURE_FILE"
+printf '%s\t%s\n' "$name" "${CARGO:-}" >> "$CARGO_CAPTURE_FILE"
+printf '%s\n' "$$" > "$READY_DIR/$name"
+printf '%s\n' "$name" > "$EPHEMERAL_CARGO_REGISTRY_SRC/$name"
+
+if [[ "$name" == fail ]]; then
+    exit 42
+fi
+if [[ "$name" == probe ]]; then
+    exit 0
+fi
+
+while [[ ! -e "$RELEASE_DIR/$name" ]]; do
+    sleep 0.02
+done
+SH
+chmod +x "$root/bin/fake-cargo"
+
+export EPHEMERAL_CARGO_REAL_CARGO="$root/bin/fake-cargo"
+export EPHEMERAL_CARGO_TMPDIR="$root/scratch"
+export CAPTURE_FILE="$root/paths"
+export READY_DIR="$root/ready"
+export RELEASE_DIR="$root/release"
+export TOOLCHAIN_CAPTURE_FILE="$root/toolchains"
+export CARGO_CAPTURE_FILE="$root/cargo-env"
+
+./ci/cargo-ephemeral-wrapper one &
+p1=$!
+./ci/cargo-ephemeral-wrapper two &
+p2=$!
+
+for _ in $(seq 1 1500); do
+    [[ -e "$root/ready/one" && -e "$root/ready/two" ]] && break
+    sleep 0.02
+done
+[[ -e "$root/ready/one" && -e "$root/ready/two" ]]
+
+mapfile -t paths < "$root/paths"
+[[ "${#paths[@]}" -eq 2 ]]
+[[ "${paths[0]}" == "${paths[1]}" ]]
+src="${paths[0]}"
+[[ -f "$src/one" && -f "$src/two" ]]
+
+touch "$root/release/one"
+wait "$p1"
+[[ -d "$src" ]]
+[[ -f "$src/two" ]]
+
+touch "$root/release/two"
+wait "$p2"
+[[ ! -e "$src" ]]
+
+set +e
+./ci/cargo-ephemeral-wrapper fail
+rc=$?
+set -e
+[[ "$rc" -eq 42 ]]
+[[ ! -e "$EPHEMERAL_CARGO_TMPDIR/uid-$(id -u)/src" ]]
+
+./ci/cargo-ephemeral-wrapper +nightly probe
+grep -qx $'probe\tnightly' "$TOOLCHAIN_CAPTURE_FILE"
+expected_wrapper="$(readlink -f ./ci/cargo-ephemeral-wrapper)"
+grep -Fxq $'probe\t'"$expected_wrapper" "$CARGO_CAPTURE_FILE"
+[[ ! -e "$EPHEMERAL_CARGO_TMPDIR/uid-$(id -u)/src" ]]
+
+echo "cargo-ephemeral wrapper concurrency/cleanup/toolchain test passed"
