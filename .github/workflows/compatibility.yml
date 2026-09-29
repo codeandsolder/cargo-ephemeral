@@ -1,0 +1,67 @@
+name: Compatibility
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "41 3 * * 0"
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  COMPAT_ISSUE_TITLE: "Automated Cargo compatibility failure"
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  toolchains:
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain: [stable, beta, nightly]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install ${{ matrix.toolchain }} --profile minimal --component rustfmt
+          rustup default ${{ matrix.toolchain }}
+
+      - name: Wrapper concurrency smoke
+        run: ci/test-cargo-ephemeral-wrapper
+
+      - name: Build and focused test
+        run: |
+          cargo build --bin cargo
+          CARGO_TEST_DISABLE_NIGHTLY=1 cargo test --test testsuite registry_source_can_be_ephemeral
+
+  report:
+    if: always()
+    needs: toolchains
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update compatibility issue
+        run: |
+          issue=$(gh api "repos/$GITHUB_REPOSITORY/issues?state=open&per_page=100" |
+            jq -r --arg title "$COMPAT_ISSUE_TITLE" '.[] | select(.pull_request | not) | select(.title == $title) | .number' |
+            head -n1)
+
+          if [ "${{ needs.toolchains.result }}" = "success" ]; then
+            if [ -n "$issue" ]; then
+              jq -n --arg body "Compatibility recovered in $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID." '{body:$body}' |
+                gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$issue/comments" --input -
+              gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/$issue" -f state=closed >/dev/null
+            fi
+          else
+            printf 'Stable/beta/nightly compatibility failed.\n\nRun: %s/%s/actions/runs/%s\n' "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > /tmp/compat.md
+            if [ -n "$issue" ]; then
+              jq -n --rawfile body /tmp/compat.md '{body:$body}' |
+                gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$issue/comments" --input -
+            else
+              jq -n --arg title "$COMPAT_ISSUE_TITLE" --rawfile body /tmp/compat.md '{title:$title,body:$body}' |
+                gh api --method POST "repos/$GITHUB_REPOSITORY/issues" --input -
+            fi
+            exit 1
+          fi
