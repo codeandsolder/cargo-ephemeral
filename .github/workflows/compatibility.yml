@@ -2,14 +2,20 @@ name: Compatibility
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "41 3 * * 0"
+  push:
+    tags:
+      - "0.*"
+
+concurrency:
+  group: compatibility-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
   issues: write
 
 env:
+  CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C target-cpu=x86-64-v2"
   COMPAT_ISSUE_TITLE: "Automated Cargo compatibility failure"
   GH_TOKEN: ${{ github.token }}
 

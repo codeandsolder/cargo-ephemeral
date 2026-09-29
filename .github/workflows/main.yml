@@ -4,6 +4,10 @@ on:
   pull_request:
     branches:
       - "**"
+  push:
+    tags:
+      - "0.*"
+  workflow_dispatch:
 
 defaults:
   run:
@@ -18,18 +22,15 @@ concurrency:
 
 env:
   MDBOOK_VERSION: 0.5.1
+  CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C target-cpu=x86-64-v2"
 
 jobs:
   conclusion:
     needs:
-      - build_std
       - clippy
-      - msrv
-      - docs
       - lint-docs
       - lockfile
       - resolver
-      - report-timings
       - rustfmt
       - schema
       - spellcheck
@@ -66,13 +67,7 @@ jobs:
   clippy:
     strategy:
       matrix:
-        include:
-        - name: Linux x86_64
-          os: ubuntu-latest
-        - name: macOS aarch64
-          os: macos-15
-        - name: Windows x86_64 MSVC
-          os: windows-latest
+        include: ${{ fromJSON(startsWith(github.ref, 'refs/tags/') && '[{"name":"Linux x86_64","os":"ubuntu-latest"},{"name":"macOS aarch64","os":"macos-15"},{"name":"Windows x86_64 MSVC","os":"windows-latest"}]' || '[{"name":"Linux x86_64","os":"ubuntu-latest"}]') }}
     name: Clippy ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     env:
@@ -136,63 +131,15 @@ jobs:
       RUSTUP_WINDOWS_PATH_ADD_BIN: 0
     strategy:
       matrix:
-        include:
-        - name: Linux x86_64 stable
-          os: ubuntu-latest
-          rust: stable
-          other: i686-unknown-linux-gnu
-        - name: Linux x86_64 beta
-          os: ubuntu-latest
-          rust: beta
-          other: i686-unknown-linux-gnu
-        - name: Linux x86_64 nightly
-          os: ubuntu-latest
-          rust: nightly
-          other: i686-unknown-linux-gnu
-        - name: Linux aarch64 stable
-          os: ubuntu-24.04-arm
-          rust: stable
-          other: TODO # cross-compile tests are disabled, this shouldn't matter.
-        - name: Linux aarch64 nightly
-          os: ubuntu-24.04-arm
-          rust: nightly
-          other: TODO # cross-compile tests are disabled, this shouldn't matter.
-        - name: macOS aarch64 stable
-          os: macos-15
-          rust: stable
-          other: x86_64-apple-darwin
-        - name: macOS aarch64 nightly
-          os: macos-15
-          rust: nightly
-          other: x86_64-apple-darwin
-        - name: Windows x86_64 MSVC stable
-          os: windows-latest
-          rust: stable-msvc
-          target_env: msvc
-          other: i686-pc-windows-msvc
-        - name: Windows x86_64 MSVC nightly
-          os: windows-latest
-          rust: nightly-msvc
-          target_env: msvc
-          other: i686-pc-windows-msvc
-        - name: Windows aarch64 MSVC stable
-          os: windows-11-arm
-          rust: stable-msvc
-          target_env: msvc
-          other: i686-pc-windows-msvc
-        - name: Windows aarch64 MSVC nightly
-          os: windows-11-arm
-          rust: nightly-msvc
-          target_env: msvc
-          other: i686-pc-windows-msvc
-        - name: Windows x86_64 gnu nightly # runs out of space while trying to link the test suite
-          os: windows-latest
-          rust: nightly-gnu
-          target_env: gnu
-          other: i686-pc-windows-gnu
+        include: ${{ fromJSON(startsWith(github.ref, 'refs/tags/') && '[{"name":"Linux x86_64 stable","os":"ubuntu-latest","rust":"stable","other":"i686-unknown-linux-gnu"},{"name":"Linux x86_64 beta","os":"ubuntu-latest","rust":"beta","other":"i686-unknown-linux-gnu"},{"name":"Linux x86_64 nightly","os":"ubuntu-latest","rust":"nightly","other":"i686-unknown-linux-gnu"},{"name":"Linux aarch64 stable","os":"ubuntu-24.04-arm","rust":"stable","other":"TODO"},{"name":"Linux aarch64 nightly","os":"ubuntu-24.04-arm","rust":"nightly","other":"TODO"},{"name":"macOS aarch64 stable","os":"macos-15","rust":"stable","other":"x86_64-apple-darwin"},{"name":"macOS aarch64 nightly","os":"macos-15","rust":"nightly","other":"x86_64-apple-darwin"},{"name":"Windows x86_64 MSVC stable","os":"windows-latest","rust":"stable-msvc","target_env":"msvc","other":"i686-pc-windows-msvc"},{"name":"Windows x86_64 MSVC nightly","os":"windows-latest","rust":"nightly-msvc","target_env":"msvc","other":"i686-pc-windows-msvc"},{"name":"Windows aarch64 MSVC stable","os":"windows-11-arm","rust":"stable-msvc","target_env":"msvc","other":"i686-pc-windows-msvc"},{"name":"Windows aarch64 MSVC nightly","os":"windows-11-arm","rust":"nightly-msvc","target_env":"msvc","other":"i686-pc-windows-msvc"},{"name":"Windows x86_64 gnu nightly","os":"windows-latest","rust":"nightly-gnu","target_env":"gnu","other":"i686-pc-windows-gnu"}]' || '[{"name":"Linux x86_64 stable","os":"ubuntu-latest","rust":"stable","other":"i686-unknown-linux-gnu"}]') }}
     name: Tests ${{ matrix.name }}
     steps:
     - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
+    - name: Use short target path
+      # The fork name makes the default checkout/target path long enough for
+      # ssh-agent Unix sockets in Cargo's testsuite to exceed sun_path. RUNNER_TEMP
+      # is a short runtime path on every hosted runner and is available to steps.
+      run: echo "CARGO_TARGET_DIR=$RUNNER_TEMP/cargo-target" >> "$GITHUB_ENV"
     - name: Dump Environment
       run: ci/dump-environment.sh
     # Some tests require stable. Make sure it is set to the most recent stable
@@ -285,6 +232,7 @@ jobs:
     - run: cargo test -p resolver-tests
 
   build_std:
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
@@ -295,6 +243,7 @@ jobs:
       env:
         CARGO_RUN_BUILD_STD_TESTS: 1
   docs:
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
@@ -323,6 +272,7 @@ jobs:
         sh linkcheck.sh --all --path ../doc/book cargo
 
   msrv:
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
@@ -341,6 +291,7 @@ jobs:
       uses: crate-ci/typos@4d9c206a77c041268485162b8e2579ad7a5cb9a3  # v1.50.0
 
   report-timings:
+    if: startsWith(github.ref, 'refs/tags/')
     name: Timing HTML report
     runs-on: ubuntu-latest
     steps:
