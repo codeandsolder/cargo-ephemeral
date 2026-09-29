@@ -1,0 +1,76 @@
+name: Publish CI Cargo client
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Commit/ref to publish
+        required: true
+        default: master
+        type: string
+      release_tag:
+        description: Immutable release tag
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-publish:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 1
+
+      - name: Resolve source revision
+        id: rev
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "source SHA: $sha"
+
+      - name: Install stable Rust
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Build portable Linux client
+        shell: bash
+        env:
+          RUSTFLAGS: "-C target-cpu=x86-64-v2"
+        run: |
+          set -euo pipefail
+          cargo build --release --locked --bin cargo
+          install -D -m 0755 target/release/cargo dist/cargo-ephemeral-linux-x86_64
+          sha256sum dist/cargo-ephemeral-linux-x86_64 > dist/SHA256SUMS
+          ldd --version | head -n1 > dist/build.txt
+          {
+            echo "source_sha=${{ steps.rev.outputs.sha }}"
+            echo "runner=ubuntu-22.04"
+            echo "rustflags=-C target-cpu=x86-64-v2"
+          } >> dist/build.txt
+
+      - name: Publish immutable release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Release $RELEASE_TAG already exists; refusing to mutate an immutable toolchain release." >&2
+            exit 1
+          fi
+          gh release create "$RELEASE_TAG" \
+            --target "${{ steps.rev.outputs.sha }}" \
+            --title "CI Cargo client ${{ steps.rev.outputs.sha }}" \
+            --notes "Pinned Ubuntu 22.04-compatible Linux x86-64-v2 cargo-ephemeral binary for centrally managed CI." \
+            dist/cargo-ephemeral-linux-x86_64 dist/SHA256SUMS dist/build.txt
