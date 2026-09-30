@@ -541,7 +541,16 @@ pub fn resolve_with_previous<'gctx>(
     }
     let gctx = ws.gctx();
     let mut deferred = gctx.deferred_global_last_use()?;
-    deferred.save_no_error(gctx);
+    if shared_locked_offline {
+        // Usage tracking is a real SQLite mutation. End the concurrent
+        // read-only resolver phase, then serialize only this small flush.
+        drop(_lock);
+        let _usage_lock =
+            gctx.acquire_package_cache_lock(CacheLockMode::DownloadExclusive)?;
+        deferred.save_no_error(gctx);
+    } else {
+        deferred.save_no_error(gctx);
+    }
     Ok(resolved)
 }
 
