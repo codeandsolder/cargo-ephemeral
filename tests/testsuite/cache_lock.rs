@@ -101,9 +101,15 @@ fn verify_lock_would_block(mode: CacheLockMode) -> JoinHandle<()> {
 #[test]
 fn new_is_unlocked() {
     let locker = CacheLocker::new();
+    assert!(!locker.is_locked(CacheLockMode::ResolveShared));
     assert!(!locker.is_locked(CacheLockMode::Shared));
     assert!(!locker.is_locked(CacheLockMode::DownloadExclusive));
     assert!(!locker.is_locked(CacheLockMode::MutateExclusive));
+}
+
+#[cargo_test]
+fn multiple_resolve_shared() {
+    a_b_nested(CacheLockMode::ResolveShared, CacheLockMode::ResolveShared);
 }
 
 #[cargo_test]
@@ -121,6 +127,56 @@ fn multiple_shared_separate() {
     // Test that two independent shared locks are safe to acquire at the same time.
     a_then_b_separate_not_blocked(
         CacheLockMode::Shared,
+        CacheLockMode::Shared,
+        CacheLockMode::MutateExclusive,
+    );
+}
+
+#[cfg_attr(
+    any(target_os = "aix", target_os = "solaris"),
+    ignore = "Test fails on AIX due to unsupported flock behaviour and on Solaris due to process-scoped fcntl locks"
+)]
+#[cargo_test]
+fn multiple_resolve_shared_separate() {
+    a_then_b_separate_not_blocked(
+        CacheLockMode::ResolveShared,
+        CacheLockMode::ResolveShared,
+        CacheLockMode::DownloadExclusive,
+    );
+}
+
+#[cfg_attr(
+    any(target_os = "aix", target_os = "solaris"),
+    ignore = "Test fails on AIX due to unsupported flock behaviour and on Solaris due to process-scoped fcntl locks"
+)]
+#[cargo_test]
+fn resolve_shared_then_download_separate() {
+    a_then_b_separate_blocked(
+        CacheLockMode::ResolveShared,
+        CacheLockMode::DownloadExclusive,
+    );
+}
+
+#[cfg_attr(
+    any(target_os = "aix", target_os = "solaris"),
+    ignore = "Test fails on AIX due to unsupported flock behaviour and on Solaris due to process-scoped fcntl locks"
+)]
+#[cargo_test]
+fn download_then_resolve_shared_separate() {
+    a_then_b_separate_blocked(
+        CacheLockMode::DownloadExclusive,
+        CacheLockMode::ResolveShared,
+    );
+}
+
+#[cfg_attr(
+    any(target_os = "aix", target_os = "solaris"),
+    ignore = "Test fails on AIX due to unsupported flock behaviour and on Solaris due to process-scoped fcntl locks"
+)]
+#[cargo_test]
+fn resolve_shared_then_build_shared_separate() {
+    a_then_b_separate_not_blocked(
+        CacheLockMode::ResolveShared,
         CacheLockMode::Shared,
         CacheLockMode::MutateExclusive,
     );
@@ -207,6 +263,7 @@ fn readonly() {
     let gctx = GlobalContextBuilder::new().build();
     let locker = CacheLocker::new();
     for mode in [
+        CacheLockMode::ResolveShared,
         CacheLockMode::Shared,
         CacheLockMode::DownloadExclusive,
         CacheLockMode::MutateExclusive,
