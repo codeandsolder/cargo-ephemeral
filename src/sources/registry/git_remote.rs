@@ -107,7 +107,9 @@ impl<'gctx> GitRegistry<'gctx> {
 
     /// Creates intermediate dirs and initialize the repository.
     fn repo(&self) -> CargoResult<Ref<'_, Option<git2::Repository>>> {
-        if self.gctx.package_cache_lock_is_held(CacheLockMode::ResolveShared)
+        if self
+            .gctx
+            .package_cache_lock_is_held(CacheLockMode::ResolveShared)
             && !self
                 .gctx
                 .package_cache_lock_is_held(CacheLockMode::DownloadExclusive)
