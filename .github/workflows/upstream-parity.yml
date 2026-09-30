@@ -80,7 +80,15 @@ jobs:
               ci/fetch-smoke-test.sh|\
               ci/test-cargo-ephemeral-wrapper|\
               src/context/mod.rs|\
+              src/ops/resolve.rs|\
+              src/sources/git/source.rs|\
+              src/sources/registry/download.rs|\
+              src/sources/registry/git_remote.rs|\
+              src/sources/registry/http_remote.rs|\
+              src/sources/registry/index/cache.rs|\
+              src/sources/registry/mod.rs|\
               src/util/cache_lock.rs|\
+              tests/testsuite/cache_lock.rs|\
               tests/testsuite/cargo_command.rs|\
               tests/testsuite/registry.rs)
                 ;;
@@ -99,7 +107,11 @@ jobs:
         run: ci/test-cargo-ephemeral-wrapper
 
       - name: Focused regression test
-        run: CARGO_TEST_DISABLE_NIGHTLY=1 cargo test --test testsuite registry_source_can_be_ephemeral
+        run: |
+          export CARGO_TEST_DISABLE_NIGHTLY=1
+          cargo test --test testsuite cache_lock::
+          cargo test --test testsuite shared_locked_offline_sparse_resolve_uses_shared_lock
+          cargo test --test testsuite registry_source_can_be_ephemeral
 
       - name: Workspace check
         run: cargo check --workspace --all-targets
