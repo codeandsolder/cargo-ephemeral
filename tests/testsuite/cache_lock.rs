@@ -101,15 +101,82 @@ fn verify_lock_would_block(mode: CacheLockMode) -> JoinHandle<()> {
 #[test]
 fn new_is_unlocked() {
     let locker = CacheLocker::new();
+    assert!(!locker.is_locked(CacheLockMode::ResolveShared));
     assert!(!locker.is_locked(CacheLockMode::Shared));
     assert!(!locker.is_locked(CacheLockMode::DownloadExclusive));
     assert!(!locker.is_locked(CacheLockMode::MutateExclusive));
 }
 
 #[cargo_test]
+fn multiple_resolve_shared() {
+    a_b_nested(CacheLockMode::ResolveShared, CacheLockMode::ResolveShared);
+}
+
+#[cargo_test]
 fn multiple_shared() {
     // Test that two nested shared locks from the same locker are safe to acquire.
     a_b_nested(CacheLockMode::Shared, CacheLockMode::Shared);
+}
+
+#[cfg_attr(
+    any(target_os = "aix", target_os = "solaris"),
+    ignore = "Test fails on AIX due to unsupported flock behaviour and on Solaris due to process-scoped fcntl locks"
+)]
+#[cargo_test]
+fn multiple_resolve_shared_separate() {
+    a_then_b_separate_not_blocked(
+        CacheLockMode::ResolveShared,
+        CacheLockMode::ResolveShared,
+        CacheLockMode::DownloadExclusive,
+    );
+}
+
+#[cfg_attr(
+    any(target_os = "aix", target_os = "solaris"),
+    ignore = "Test fails on AIX due to unsupported flock behaviour and on Solaris due to process-scoped fcntl locks"
+)]
+#[cargo_test]
+fn resolve_shared_then_download_separate() {
+    a_then_b_separate_blocked(
+        CacheLockMode::ResolveShared,
+        CacheLockMode::DownloadExclusive,
+    );
+}
+
+#[cfg_attr(
+    any(target_os = "aix", target_os = "solaris"),
+    ignore = "Test fails on AIX due to unsupported flock behaviour and on Solaris due to process-scoped fcntl locks"
+)]
+#[cargo_test]
+fn download_then_resolve_shared_separate() {
+    a_then_b_separate_blocked(
+        CacheLockMode::DownloadExclusive,
+        CacheLockMode::ResolveShared,
+    );
+}
+
+#[cfg_attr(
+    any(target_os = "aix", target_os = "solaris"),
+    ignore = "Test fails on AIX due to unsupported flock behaviour and on Solaris due to process-scoped fcntl locks"
+)]
+#[cargo_test]
+fn resolve_shared_then_mutate_separate() {
+    a_then_b_separate_blocked(
+        CacheLockMode::ResolveShared,
+        CacheLockMode::MutateExclusive,
+    );
+}
+
+#[cfg_attr(
+    any(target_os = "aix", target_os = "solaris"),
+    ignore = "Test fails on AIX due to unsupported flock behaviour and on Solaris due to process-scoped fcntl locks"
+)]
+#[cargo_test]
+fn mutate_then_resolve_shared_separate() {
+    a_then_b_separate_blocked(
+        CacheLockMode::MutateExclusive,
+        CacheLockMode::ResolveShared,
+    );
 }
 
 #[cfg_attr(
@@ -207,6 +274,7 @@ fn readonly() {
     let gctx = GlobalContextBuilder::new().build();
     let locker = CacheLocker::new();
     for mode in [
+        CacheLockMode::ResolveShared,
         CacheLockMode::Shared,
         CacheLockMode::DownloadExclusive,
         CacheLockMode::MutateExclusive,
@@ -311,6 +379,97 @@ fn mutate_then_download_separate() {
 #[cargo_test]
 fn mutate_then_shared_separate() {
     a_then_b_separate_blocked(CacheLockMode::MutateExclusive, CacheLockMode::Shared);
+}
+
+#[cfg_attr(
+    any(target_os = "aix", target_os = "solaris"),
+    ignore = "Test relies on per-file flock behavior"
+)]
+#[cargo_test]
+fn resolve_shared_try_lock_rolls_back_mutate_half() {
+    let gctx = GlobalContextBuilder::new().build();
+
+    let download_locker = CacheLocker::new();
+    let download = download_locker
+        .lock(&gctx, CacheLockMode::DownloadExclusive)
+        .unwrap();
+
+    let resolver_locker = CacheLocker::new();
+    assert!(
+        resolver_locker
+            .try_lock(&gctx, CacheLockMode::ResolveShared)
+            .unwrap()
+            .is_none()
+    );
+
+    // If the failed ResolveShared left mutate-shared behind, this could not
+    // acquire MutateExclusive after the package lock is released.
+    drop(download);
+    let mutate_locker = CacheLocker::new();
+    let _mutate = mutate_locker
+        .try_lock(&gctx, CacheLockMode::MutateExclusive)
+        .unwrap()
+        .expect("failed ResolveShared must roll back mutate-shared");
+}
+
+#[cfg_attr(
+    any(target_os = "aix", target_os = "solaris"),
+    ignore = "Test relies on per-file flock behavior"
+)]
+#[cargo_test]
+fn resolve_shared_to_download_handoff_never_exposes_gc_window() {
+    let gctx = GlobalContextBuilder::new().build();
+    let resolver_locker = CacheLocker::new();
+    let contender = CacheLocker::new();
+
+    let resolver = resolver_locker
+        .lock(&gctx, CacheLockMode::ResolveShared)
+        .unwrap();
+    let bridge = resolver_locker.lock(&gctx, CacheLockMode::Shared).unwrap();
+
+    assert!(
+        contender
+            .try_lock(&gctx, CacheLockMode::MutateExclusive)
+            .unwrap()
+            .is_none()
+    );
+
+    // Drop package-shared while keeping mutate-shared bridged.
+    drop(resolver);
+    assert!(
+        contender
+            .try_lock(&gctx, CacheLockMode::MutateExclusive)
+            .unwrap()
+            .is_none()
+    );
+
+    // Shared->DownloadExclusive is a supported order. Once package-exclusive
+    // is held, the mutate bridge can go away without letting GC enter.
+    let download = resolver_locker
+        .lock(&gctx, CacheLockMode::DownloadExclusive)
+        .unwrap();
+    drop(bridge);
+    assert!(
+        contender
+            .try_lock(&gctx, CacheLockMode::MutateExclusive)
+            .unwrap()
+            .is_none()
+    );
+
+    drop(download);
+    let _mutate = contender
+        .try_lock(&gctx, CacheLockMode::MutateExclusive)
+        .unwrap()
+        .expect("GC should proceed after the handoff exclusive lock is released");
+}
+
+#[cargo_test]
+fn resolve_shared_does_not_satisfy_download_exclusive() {
+    let gctx = GlobalContextBuilder::new().build();
+    let locker = CacheLocker::new();
+    let _lock = locker.lock(&gctx, CacheLockMode::ResolveShared).unwrap();
+    assert!(locker.is_locked(CacheLockMode::ResolveShared));
+    assert!(!locker.is_locked(CacheLockMode::DownloadExclusive));
 }
 
 #[cargo_test(ignore_windows = "no method to prevent creating or locking a file")]
