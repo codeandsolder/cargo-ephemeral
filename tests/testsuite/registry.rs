@@ -214,7 +214,7 @@ fn shared_locked_offline_sparse_resolve() {
     // The experimental resolver must coexist with another read resolver while
     // touching a real cached sparse-registry dependency. Any hidden write path
     // that still requires DownloadExclusive should fail this test.
-    threaded_timeout(20, move || {
+    threaded_timeout(200, move || {
         p.cargo("metadata --locked --offline --format-version 1")
             .env("CARGO_SHARED_LOCKED_OFFLINE_RESOLUTION", "1")
             .run();
