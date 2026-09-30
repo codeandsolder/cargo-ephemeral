@@ -8,6 +8,7 @@ use std::sync::Mutex;
 
 use crate::prelude::*;
 use crate::utils::cargo_process;
+use cargo::util::cache_lock::{CacheLockMode, CacheLocker};
 use cargo::workspace::SourceId;
 use cargo_test_support::assert_deterministic_mtime;
 use cargo_test_support::paths;
@@ -15,7 +16,9 @@ use cargo_test_support::registry::{
     self, Dependency, Package, RegistryBuilder, Response, TestRegistry, registry_path,
 };
 use cargo_test_support::{basic_manifest, project, str};
-use cargo_test_support::{git, t};
+use cargo_test_support::{git, t, threaded_timeout};
+
+use crate::config::GlobalContextBuilder;
 use cargo_util::paths::remove_dir_all;
 
 fn setup_http() -> TestRegistry {
@@ -177,6 +180,45 @@ fn registry_source_can_be_ephemeral() {
         .is_some()
     );
     assert!(!paths::cargo_home().join("registry/src").exists());
+}
+
+#[cargo_test]
+fn shared_locked_offline_sparse_resolve() {
+    let _server = setup_http();
+    let p = project()
+        .file(
+            "Cargo.toml",
+            r#"
+                [package]
+                name = "shared-resolver-registry-smoke"
+                version = "0.1.0"
+                edition = "2024"
+
+                [dependencies]
+                bar = "0.0.1"
+            "#,
+        )
+        .file("src/lib.rs", "")
+        .build();
+
+    Package::new("bar", "0.0.1").publish();
+
+    // Populate Cargo.lock, sparse index state, the verified archive and source.
+    p.cargo("fetch").run();
+
+    let root = paths::root();
+    let gctx = GlobalContextBuilder::new().root(root).build();
+    let locker = CacheLocker::new();
+    let _held = locker.lock(&gctx, CacheLockMode::ResolveShared).unwrap();
+
+    // The experimental resolver must coexist with another read resolver while
+    // touching a real cached sparse-registry dependency. Any hidden write path
+    // that still requires DownloadExclusive should fail this test.
+    threaded_timeout(20, move || {
+        p.cargo("metadata --locked --offline --format-version 1")
+            .env("CARGO_SHARED_LOCKED_OFFLINE_RESOLUTION", "1")
+            .run();
+    });
 }
 
 #[cargo_test]
