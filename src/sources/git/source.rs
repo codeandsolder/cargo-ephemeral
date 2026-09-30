@@ -245,6 +245,17 @@ impl<'gctx> GitSource<'gctx> {
     }
 
     fn update(&self) -> CargoResult<()> {
+        if self
+            .gctx
+            .package_cache_lock_is_held(CacheLockMode::ResolveShared)
+            && !self
+                .gctx
+                .package_cache_lock_is_held(CacheLockMode::DownloadExclusive)
+        {
+            anyhow::bail!(
+                "git sources are not supported by shared locked/offline resolution"
+            );
+        }
         if self.path_source.borrow().is_some() {
             self.mark_used()?;
             return Ok(());
