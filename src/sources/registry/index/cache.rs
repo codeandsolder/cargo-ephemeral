@@ -262,7 +262,10 @@ impl<'gctx> CacheManager<'gctx> {
             .gctx
             .package_cache_lock_is_held(CacheLockMode::DownloadExclusive)
         {
-            tracing::debug!(key, "skipping registry summary cache write under shared resolver lock");
+            tracing::debug!(
+                key,
+                "skipping registry summary cache write under shared resolver lock"
+            );
             return;
         }
         let cache_path = &self.cache_path(key);
