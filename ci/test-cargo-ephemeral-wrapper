@@ -75,19 +75,34 @@ wait "$p1"
 
 touch "$root/release/two"
 wait "$p2"
-[[ ! -e "$src" ]]
+# The source pool is intentionally warm after the last overlapping Cargo exits.
+[[ -d "$src" ]]
+[[ -f "$src/one" && -f "$src/two" ]]
 
 set +e
 ./ci/cargo-ephemeral-wrapper fail
 rc=$?
 set -e
 [[ "$rc" -eq 42 ]]
-[[ ! -e "$EPHEMERAL_CARGO_TMPDIR/uid-$(id -u)/src" ]]
+[[ -d "$src" ]]
+[[ -f "$src/fail" ]]
 
+# Exercise bounded cleanup explicitly. The fake cargo writes more than one byte,
+# so both the initial housekeeping pass and exit housekeeping are eligible to
+# prune. The final state should therefore be empty while toolchain/CARGO
+# forwarding remains covered by the same invocation.
+EPHEMERAL_CARGO_SOURCE_MAX_BYTES=1 \
+EPHEMERAL_CARGO_SOURCE_PRUNE_INTERVAL_SECONDS=0 \
 ./ci/cargo-ephemeral-wrapper +nightly probe
-grep -qx $'probe\tnightly' "$TOOLCHAIN_CAPTURE_FILE"
+grep -qx 
+
+echo "cargo-ephemeral wrapper concurrency/cleanup/toolchain test passed"
+probe\tnightly' "$TOOLCHAIN_CAPTURE_FILE"
 expected_wrapper="$(readlink -f ./ci/cargo-ephemeral-wrapper)"
-grep -Fxq $'probe\t'"$expected_wrapper" "$CARGO_CAPTURE_FILE"
+grep -Fxq 
+
+echo "cargo-ephemeral wrapper concurrency/cleanup/toolchain test passed"
+probe\t'"$expected_wrapper" "$CARGO_CAPTURE_FILE"
 [[ ! -e "$EPHEMERAL_CARGO_TMPDIR/uid-$(id -u)/src" ]]
 
 echo "cargo-ephemeral wrapper concurrency/cleanup/toolchain test passed"
