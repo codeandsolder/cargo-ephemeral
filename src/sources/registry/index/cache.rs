@@ -272,12 +272,12 @@ impl<'gctx> CacheManager<'gctx> {
         }
     }
 
-    fn put_inner(&self, cache_path: &PathBuf, value: &[u8]) -> std::io::Result<()> {
+    fn put_inner(&self, cache_path: &PathBuf, value: &[u8]) -> CargoResult<()> {
         fs::create_dir_all(cache_path.parent().unwrap())?;
         let path = Filesystem::new(cache_path.clone());
         self.gctx
             .assert_package_cache_locked(CacheLockMode::DownloadExclusive, &path);
-        fs::write(cache_path, value)?;
+        cargo_util::paths::write_atomic(cache_path, value)?;
         Ok(())
     }
 
