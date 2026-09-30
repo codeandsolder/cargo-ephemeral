@@ -71,10 +71,13 @@ jobs:
               .github/workflows/contrib.yml|\
               .github/workflows/main.yml|\
               .github/workflows/publish-ci-client.yml|\
+              .github/workflows/sccache-l0-merge.yml|\
+              .github/workflows/shared-sccache.yml|\
               .github/workflows/upstream-parity.yml|\
               EPHEMERAL_REGISTRY.md|\
               ci/cargo-ephemeral-wrapper|\
               ci/clean-test-output.sh|\
+              ci/fetch-smoke-test.sh|\
               ci/test-cargo-ephemeral-wrapper|\
               src/context/mod.rs|\
               tests/testsuite/cargo_command.rs|\
