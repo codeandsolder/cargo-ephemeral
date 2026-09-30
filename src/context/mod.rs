@@ -2150,6 +2150,11 @@ impl GlobalContext {
         self.package_cache_lock.try_lock(self, mode)
     }
 
+    /// Returns whether this process currently holds a compatible package-cache lock.
+    pub(crate) fn package_cache_lock_is_held(&self, mode: CacheLockMode) -> bool {
+        self.package_cache_lock.is_locked(mode)
+    }
+
     /// Returns a reference to the shared [`GlobalCacheTracker`].
     ///
     /// The package cache lock must be held to call this function (and to use
