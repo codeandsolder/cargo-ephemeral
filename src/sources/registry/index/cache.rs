@@ -270,8 +270,9 @@ impl<'gctx> CacheManager<'gctx> {
             tracing::info!(?cache_path, "failed to write cache: {e}");
 
             if !*self.has_warned.borrow() {
+                let root_cause = e.root_cause();
                 let _ = self.gctx.shell().warn(format!(
-                    "failed to write cache, path: {}, error: {e}",
+                    "failed to write cache, path: {}, error: {root_cause}",
                     cache_path.to_str().unwrap_or_default()
                 ));
                 *self.has_warned.borrow_mut() = true;
