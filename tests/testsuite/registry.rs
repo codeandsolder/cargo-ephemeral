@@ -161,7 +161,10 @@ fn shared_locked_offline_git_resolve_uses_fresh_cached_checkout() {
         "metadata failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(marker.is_file(), "shared resolve must not replace the ready marker");
+    assert!(
+        marker.is_file(),
+        "shared resolve must not replace the ready marker"
+    );
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -204,7 +207,10 @@ fn shared_locked_offline_git_resolve_refuses_stale_checkout() {
         .env("CARGO_SHARED_LOCKED_OFFLINE_RESOLUTION", "1")
         .exec_with_output()
         .unwrap();
-    assert!(!output.status.success(), "stale git checkout unexpectedly succeeded");
+    assert!(
+        !output.status.success(),
+        "stale git checkout unexpectedly succeeded"
+    );
     assert!(
         !marker.exists(),
         "shared resolution must not repair a stale git checkout"
