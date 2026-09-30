@@ -52,3 +52,17 @@ Pages deployment jobs are skipped in this fork.
 These CI changes are deliberate downstream policy, not rebase noise. An
 automated parity repair must preserve both this section and the ephemeral
 registry-source invariants above while otherwise preferring upstream behavior.
+
+
+## Package-cache lock tracing
+
+This fork also carries an opt-in diagnostic for global package-cache contention.
+Set `CARGO_PACKAGE_CACHE_LOCK_TRACE=1` to emit one stderr line for each package
+cache lock guard. Blocking acquisitions report their wait time when the guard is
+released, along with hold time, lock mode, PID, recursive-acquisition status,
+and the source callsite that requested the lock. Non-blocking lock attempts that
+fail immediately emit `result=would-block`.
+
+The diagnostic is disabled by default and does not change lock semantics.
+It is intended for profiling coarse `.package-cache` contention before making
+locking behavior changes.

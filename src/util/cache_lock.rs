@@ -91,8 +91,10 @@ use super::FileLock;
 use crate::CargoResult;
 use crate::GlobalContext;
 use anyhow::Context as _;
-use std::io;
+use std::io::{self, Write as _};
+use std::panic::Location;
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 /// The style of lock to acquire.
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -423,6 +425,23 @@ impl CacheState {
     }
 }
 
+#[derive(Debug)]
+struct LockTrace {
+    mode: CacheLockMode,
+    caller: &'static Location<'static>,
+    wait: Duration,
+    acquired_at: Instant,
+    recursive: bool,
+}
+
+fn lock_trace_enabled(gctx: &GlobalContext) -> bool {
+    gctx.get_env_os("CARGO_PACKAGE_CACHE_LOCK_TRACE").is_some()
+}
+
+fn emit_lock_trace(args: std::fmt::Arguments<'_>) {
+    let _ = writeln!(io::stderr().lock(), "{args}");
+}
+
 /// A held lock guard.
 ///
 /// When this is dropped, the lock will be released.
@@ -430,11 +449,13 @@ impl CacheState {
 pub struct CacheLock<'lock> {
     mode: CacheLockMode,
     locker: &'lock CacheLocker,
+    trace: Option<LockTrace>,
 }
 
 impl Drop for CacheLock<'_> {
     fn drop(&mut self) {
         use CacheLockMode::*;
+        let held = self.trace.as_ref().map(|trace| trace.acquired_at.elapsed());
         let mut state = match self.locker.state.lock() {
             Ok(result) => result,
             // we should release the cache even if a thread panicked while holding a lock
@@ -451,6 +472,21 @@ impl Drop for CacheLock<'_> {
                 state.cache_lock.decrement();
                 state.mutate_lock.decrement();
             }
+        }
+        drop(state);
+
+        if let (Some(trace), Some(held)) = (&self.trace, held) {
+            emit_lock_trace(format_args!(
+                "[cargo-package-lock] pid={} mode={:?} recursive={} wait_ms={:.3} held_ms={:.3} caller={}:{}:{}",
+                std::process::id(),
+                trace.mode,
+                trace.recursive,
+                trace.wait.as_secs_f64() * 1000.0,
+                held.as_secs_f64() * 1000.0,
+                trace.caller.file(),
+                trace.caller.line(),
+                trace.caller.column(),
+            ));
         }
     }
 }
@@ -493,23 +529,78 @@ impl CacheLocker {
 
     /// Acquires a lock with the given mode, possibly blocking if another
     /// cargo is holding the lock.
+    #[track_caller]
     pub fn lock(&self, gctx: &GlobalContext, mode: CacheLockMode) -> CargoResult<CacheLock<'_>> {
+        let tracing = lock_trace_enabled(gctx);
+        let started = tracing.then(Instant::now);
+        let caller = tracing.then(Location::caller);
         let mut state = self.state.lock().unwrap();
+        let recursive = match mode {
+            CacheLockMode::Shared => state.mutate_lock.count > 0,
+            CacheLockMode::DownloadExclusive => state.cache_lock.count > 0,
+            CacheLockMode::MutateExclusive => {
+                state.mutate_lock.count > 0 || state.cache_lock.count > 0
+            }
+        };
         let _ = state.lock(gctx, mode, Blocking)?;
-        Ok(CacheLock { mode, locker: self })
+        let trace = started.zip(caller).map(|(started, caller)| LockTrace {
+            mode,
+            caller,
+            wait: started.elapsed(),
+            acquired_at: Instant::now(),
+            recursive,
+        });
+        Ok(CacheLock {
+            mode,
+            locker: self,
+            trace,
+        })
     }
 
     /// Acquires a lock with the given mode, returning `None` if another cargo
     /// is holding the lock.
+    #[track_caller]
     pub fn try_lock(
         &self,
         gctx: &GlobalContext,
         mode: CacheLockMode,
     ) -> CargoResult<Option<CacheLock<'_>>> {
+        let tracing = lock_trace_enabled(gctx);
+        let started = tracing.then(Instant::now);
+        let caller = tracing.then(Location::caller);
         let mut state = self.state.lock().unwrap();
+        let recursive = match mode {
+            CacheLockMode::Shared => state.mutate_lock.count > 0,
+            CacheLockMode::DownloadExclusive => state.cache_lock.count > 0,
+            CacheLockMode::MutateExclusive => {
+                state.mutate_lock.count > 0 || state.cache_lock.count > 0
+            }
+        };
         if state.lock(gctx, mode, NonBlocking)? == LockAcquired {
-            Ok(Some(CacheLock { mode, locker: self }))
+            let trace = started.zip(caller).map(|(started, caller)| LockTrace {
+                mode,
+                caller,
+                wait: started.elapsed(),
+                acquired_at: Instant::now(),
+                recursive,
+            });
+            Ok(Some(CacheLock {
+                mode,
+                locker: self,
+                trace,
+            }))
         } else {
+            if let (Some(started), Some(caller)) = (started, caller) {
+                emit_lock_trace(format_args!(
+                    "[cargo-package-lock] pid={} mode={:?} result=would-block wait_ms={:.3} caller={}:{}:{}",
+                    std::process::id(),
+                    mode,
+                    started.elapsed().as_secs_f64() * 1000.0,
+                    caller.file(),
+                    caller.line(),
+                    caller.column(),
+                ));
+            }
             Ok(None)
         }
     }
