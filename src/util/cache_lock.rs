@@ -108,6 +108,15 @@ pub enum CacheLockMode {
     /// If another cargo has a `Shared` lock, then both can operate
     /// concurrently.
     DownloadExclusive,
+    /// A `ResolveShared` lock allows multiple read-only dependency resolvers
+    /// to inspect the append-only package/index cache concurrently.
+    ///
+    /// This uses the same lock file as `DownloadExclusive`, but takes a shared
+    /// filesystem lock. It must only be used when resolution is guaranteed not
+    /// to mutate package-cache state. Any operation that may write, download,
+    /// unpack, initialize, or refresh cache state must still hold
+    /// `DownloadExclusive`.
+    ResolveShared,
     /// A `Shared` lock allows multiple cargos to read from the source files.
     ///
     /// You should use this when cargo is reading source files from the
@@ -377,6 +386,15 @@ impl CacheState {
             panic!("shared lock while holding download lock is not allowed");
         }
         match mode {
+            ResolveShared => {
+                if self
+                    .cache_lock
+                    .lock_shared(gctx, RESOLVE_SHARED_DESCR, blocking)
+                    == WouldBlock
+                {
+                    return Ok(WouldBlock);
+                }
+            }
             Shared => {
                 if self.mutate_lock.lock_shared(gctx, SHARED_DESCR, blocking) == WouldBlock {
                     return Ok(WouldBlock);
@@ -441,6 +459,9 @@ impl Drop for CacheLock<'_> {
             Err(poison) => poison.into_inner(),
         };
         match self.mode {
+            ResolveShared => {
+                state.cache_lock.decrement();
+            }
             Shared => {
                 state.mutate_lock.decrement();
             }
@@ -462,6 +483,7 @@ const CACHE_LOCK_NAME: &str = ".package-cache";
 const MUTATE_NAME: &str = ".package-cache-mutate";
 
 // Descriptions that are displayed in the "Blocking" message shown to the user.
+const RESOLVE_SHARED_DESCR: &str = "shared package resolution cache";
 const SHARED_DESCR: &str = "shared package cache";
 const DOWNLOAD_EXCLUSIVE_DESCR: &str = "package cache";
 const MUTATE_EXCLUSIVE_DESCR: &str = "package cache mutation";
@@ -531,9 +553,10 @@ impl CacheLocker {
             state.mutate_lock.count,
             state.mutate_lock.is_exclusive,
         ) {
+            (CacheLockMode::ResolveShared, 1.., _, _) => true,
             (CacheLockMode::Shared, _, 1.., _) => true,
-            (CacheLockMode::MutateExclusive, _, 1.., true) => true,
-            (CacheLockMode::DownloadExclusive, 1.., _, _) => true,
+            (CacheLockMode::MutateExclusive, 1.., 1.., true) => true,
+            (CacheLockMode::DownloadExclusive, 1.., _, _) if state.cache_lock.is_exclusive => true,
             _ => false,
         }
     }
