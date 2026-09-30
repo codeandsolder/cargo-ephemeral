@@ -370,6 +370,46 @@ fn mutate_then_shared_separate() {
     a_then_b_separate_blocked(CacheLockMode::MutateExclusive, CacheLockMode::Shared);
 }
 
+#[cargo_test]
+fn resolve_shared_does_not_satisfy_download_exclusive_assertion() {
+    let gctx = GlobalContextBuilder::new().build();
+    let locker = CacheLocker::new();
+    let _lock = locker.lock(&gctx, CacheLockMode::ResolveShared).unwrap();
+    assert!(locker.is_locked(CacheLockMode::ResolveShared));
+    assert!(!locker.is_locked(CacheLockMode::DownloadExclusive));
+}
+
+#[cargo_test]
+fn locked_offline_resolver_uses_shared_cache_lock() {
+    let p = project()
+        .file(
+            "Cargo.toml",
+            r#"
+                [package]
+                name = "shared-resolver-smoke"
+                version = "0.1.0"
+                edition = "2024"
+            "#,
+        )
+        .file("src/lib.rs", "")
+        .build();
+
+    p.cargo("generate-lockfile").run();
+
+    let root = paths::root();
+    let gctx = GlobalContextBuilder::new().root(root).build();
+    let locker = CacheLocker::new();
+    let _held = locker.lock(&gctx, CacheLockMode::ResolveShared).unwrap();
+
+    // If resolve_with_previous still asks for DownloadExclusive, this command
+    // blocks on the lock held above. ResolveShared must coexist with it.
+    threaded_timeout(10, move || {
+        p.cargo("metadata --locked --offline --format-version 1")
+            .env("CARGO_SHARED_LOCKED_OFFLINE_RESOLUTION", "1")
+            .run();
+    });
+}
+
 #[cargo_test(ignore_windows = "no method to prevent creating or locking a file")]
 fn mutate_err_is_atomic() {
     // Verifies that when getting a mutate lock, that if the first lock
