@@ -107,6 +107,15 @@ impl<'gctx> GitRegistry<'gctx> {
 
     /// Creates intermediate dirs and initialize the repository.
     fn repo(&self) -> CargoResult<Ref<'_, Option<git2::Repository>>> {
+        if self.gctx.package_cache_lock_is_held(CacheLockMode::ResolveShared)
+            && !self
+                .gctx
+                .package_cache_lock_is_held(CacheLockMode::DownloadExclusive)
+        {
+            anyhow::bail!(
+                "git registry indexes are not supported by shared locked/offline resolution"
+            );
+        }
         if self.repo.borrow().is_none() {
             trace!("acquiring registry index lock");
             let path = self
