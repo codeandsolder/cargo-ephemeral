@@ -375,7 +375,10 @@ impl CacheState {
         blocking: BlockingMode,
     ) -> CargoResult<LockingResult> {
         use CacheLockMode::*;
-        if mode == Shared && self.cache_lock.count > 0 && self.mutate_lock.count == 0 {
+        if matches!(mode, Shared | ResolveShared)
+            && self.cache_lock.count > 0
+            && self.mutate_lock.count == 0
+        {
             // Shared lock, when a DownloadExclusive is held.
             //
             // This isn't supported because it could cause a deadlock. If
@@ -668,8 +671,16 @@ impl CacheLocker {
             // shared, while DownloadExclusive/MutateExclusive are stronger.
             (CacheLockMode::ResolveShared, 1.., _, _) => true,
             (CacheLockMode::Shared, _, 1.., _) => true,
-            (CacheLockMode::MutateExclusive, _, 1.., true) => true,
-            (CacheLockMode::DownloadExclusive, 1.., _, _) => true,
+            (CacheLockMode::MutateExclusive, 1.., 1.., true)
+                if state.cache_lock.is_exclusive =>
+            {
+                true
+            }
+            (CacheLockMode::DownloadExclusive, 1.., _, _)
+                if state.cache_lock.is_exclusive =>
+            {
+                true
+            }
             _ => false,
         }
     }
