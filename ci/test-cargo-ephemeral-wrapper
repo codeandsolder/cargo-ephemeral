@@ -99,6 +99,8 @@ grep -Fxq "$toolchain_pattern" "$TOOLCHAIN_CAPTURE_FILE"
 expected_wrapper="$(readlink -f ./ci/cargo-ephemeral-wrapper)"
 cargo_pattern="$(printf 'probe\t%s' "$expected_wrapper")"
 grep -Fxq "$cargo_pattern" "$CARGO_CAPTURE_FILE"
-[[ -d "$EPHEMERAL_CARGO_TMPDIR/uid-$(id -u)/src" ]]\n[[ -z "$(find "$EPHEMERAL_CARGO_TMPDIR/uid-$(id -u)/src" -mindepth 1 -print -quit)" ]]
+src_after_prune="$EPHEMERAL_CARGO_TMPDIR/uid-$(id -u)/src"
+[[ -d "$src_after_prune" ]]
+test -z "$(find "$src_after_prune" -mindepth 1 -print -quit)"
 
 echo "cargo-ephemeral wrapper concurrency/cleanup/toolchain test passed"
