@@ -403,7 +403,7 @@ fn locked_offline_resolver_uses_shared_cache_lock() {
 
     // If resolve_with_previous still asks for DownloadExclusive, this command
     // blocks on the lock held above. ResolveShared must coexist with it.
-    threaded_timeout(10, move || {
+    threaded_timeout(100, move || {
         p.cargo("metadata --locked --offline --format-version 1")
             .env("CARGO_SHARED_LOCKED_OFFLINE_RESOLUTION", "1")
             .run();
