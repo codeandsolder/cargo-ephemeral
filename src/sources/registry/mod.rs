@@ -483,8 +483,12 @@ impl<'gctx> RegistrySource<'gctx> {
         // IO errors in creating and marking it are ignored, e.g. in case we're on a
         // read-only filesystem.
         let registry_base = gctx.registry_base_path();
-        let _ = registry_base.create_dir();
-        cargo_util::paths::exclude_from_backups_and_indexing(&registry_base.into_path_unlocked());
+        if gctx.package_cache_lock_is_held(CacheLockMode::DownloadExclusive) {
+            let _ = registry_base.create_dir();
+            cargo_util::paths::exclude_from_backups_and_indexing(
+                &registry_base.into_path_unlocked(),
+            );
+        }
 
         RegistrySource {
             name: name.into(),
