@@ -52,6 +52,53 @@ fn simple_http() {
 }
 
 #[cargo_test]
+fn shared_locked_offline_sparse_resolve_uses_shared_lock() {
+    let _server = setup_http();
+    let p = project()
+        .file(
+            "Cargo.toml",
+            r#"
+                [package]
+                name = "shared-resolver-registry-smoke"
+                version = "0.1.0"
+                edition = "2024"
+
+                [dependencies]
+                bar = "0.0.1"
+            "#,
+        )
+        .file("src/lib.rs", "")
+        .build();
+
+    Package::new("bar", "0.0.1").publish();
+
+    // Populate Cargo.lock, sparse index state, archive cache, and source tree.
+    p.cargo("fetch").run();
+
+    let output = p
+        .cargo("metadata --locked --offline --format-version 1")
+        .env("CARGO_SHARED_LOCKED_OFFLINE_RESOLUTION", "1")
+        .env("CARGO_PACKAGE_CACHE_LOCK_TRACE", "1")
+        .exec_with_output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "metadata failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("mode=ResolveShared"),
+        "resolver did not select ResolveShared:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("mode=DownloadExclusive"),
+        "deferred usage flush did not transition to DownloadExclusive:\n{stderr}"
+    );
+}
+
+#[cargo_test]
 fn simple_git() {
     simple(
         str![[r#"
