@@ -411,11 +411,24 @@ pub fn resolve_with_previous<'gctx>(
     specs: &[PackageIdSpec],
     register_patches: bool,
 ) -> CargoResult<Resolve> {
-    // We only want one Cargo at a time resolving a crate graph since this can
-    // involve a lot of frobbing of the global caches.
-    let _lock = ws
-        .gctx()
-        .acquire_package_cache_lock(CacheLockMode::DownloadExclusive)?;
+    // Upstream serializes the entire dependency resolver because resolution can
+    // lazily mutate registry and git caches. For controlled experiments, a
+    // fully locked + offline resolve with an existing lockfile and no git
+    // packages may instead take a shared read lock. Lower-level mutation paths
+    // still require a genuinely exclusive DownloadExclusive lock, so a missed
+    // write is rejected rather than silently racing.
+    let shared_locked_offline = std::env::var_os("CARGO_SHARED_LOCKED_OFFLINE_RESOLUTION").is_some()
+        && previous.is_some()
+        && !ws.gctx().network_allowed()
+        && !ws.gctx().lock_update_allowed()
+        && previous
+            .is_some_and(|resolve| resolve.iter().all(|id| !id.source_id().is_git()));
+    let cache_lock_mode = if shared_locked_offline {
+        CacheLockMode::ResolveShared
+    } else {
+        CacheLockMode::DownloadExclusive
+    };
+    let _lock = ws.gctx().acquire_package_cache_lock(cache_lock_mode)?;
 
     // Some packages are already loaded when setting up a workspace. This
     // makes it so anything that was already loaded will not be loaded again.
