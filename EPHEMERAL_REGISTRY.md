@@ -5,14 +5,20 @@ This fork carries one behavioral extension over upstream Cargo.
 When EPHEMERAL_CARGO_REGISTRY_SRC is set, registry packages are extracted
 under that directory instead of $CARGO_HOME/registry/src.
 
-The verified .crate archive cache remains unchanged. The intended deployment
-keeps registry/index on low-latency storage, registry/cache on bulk storage,
-and registry source extraction in process-scoped scratch that is deleted when
-the Cargo invocation exits.
+The verified .crate archive cache remains unchanged by the fork. Deployments may
+place registry/index and registry/cache on different storage tiers. Registry
+source extraction is intended to live in bounded scratch with stable paths; the
+reference wrapper keeps that scratch warm across nearby invocations instead of
+deleting it after every idle transition.
 
 ci/cargo-ephemeral-wrapper is the reference wrapper. It uses a shared lock so
-concurrent Cargo processes can safely reuse the same stable source paths, then
-the last process removes the extracted tree. Stable paths matter for compiler
+concurrent Cargo processes can safely reuse the same stable source paths. The
+last process leaves the extracted tree warm; an exclusive idle owner reclaims it
+when it exceeds the configured size cap or idle TTL. Cleanup scans are themselves
+rate-limited. Defaults are 1 GiB, 6 hours idle and a 5 minute prune interval,
+overridable with EPHEMERAL_CARGO_SOURCE_MAX_BYTES,
+EPHEMERAL_CARGO_SOURCE_MAX_IDLE_SECONDS and
+EPHEMERAL_CARGO_SOURCE_PRUNE_INTERVAL_SECONDS. Stable paths matter for compiler
 cache keys; a fresh random source path per invocation would defeat sccache
 reuse unless it were separately normalized. It also preserves rustup-style
 +toolchain invocations by translating the prefix to RUSTUP_TOOLCHAIN before
