@@ -451,6 +451,7 @@ pub struct CacheLock<'lock> {
 impl Drop for CacheLock<'_> {
     fn drop(&mut self) {
         use CacheLockMode::*;
+        let held = self.trace.as_ref().map(|trace| trace.acquired_at.elapsed());
         let mut state = match self.locker.state.lock() {
             Ok(result) => result,
             // we should release the cache even if a thread panicked while holding a lock
@@ -467,6 +468,21 @@ impl Drop for CacheLock<'_> {
                 state.cache_lock.decrement();
                 state.mutate_lock.decrement();
             }
+        }
+        drop(state);
+
+        if let (Some(trace), Some(held)) = (&self.trace, held) {
+            eprintln!(
+                "[cargo-package-lock] pid={} mode={:?} recursive={} wait_ms={:.3} held_ms={:.3} caller={}:{}:{}",
+                std::process::id(),
+                trace.mode,
+                trace.recursive,
+                trace.wait.as_secs_f64() * 1000.0,
+                held.as_secs_f64() * 1000.0,
+                trace.caller.file(),
+                trace.caller.line(),
+                trace.caller.column(),
+            );
         }
     }
 }
