@@ -421,8 +421,7 @@ pub fn resolve_with_previous<'gctx>(
         .is_some()
         && previous.is_some()
         && !ws.gctx().network_allowed()
-        && !ws.gctx().lock_update_allowed()
-        && previous.is_some_and(|resolve| resolve.iter().all(|id| !id.source_id().is_git()));
+        && !ws.gctx().lock_update_allowed();
     let cache_lock_mode = if shared_locked_offline {
         CacheLockMode::ResolveShared
     } else {
