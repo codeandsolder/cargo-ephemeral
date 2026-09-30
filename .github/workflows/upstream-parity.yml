@@ -82,6 +82,7 @@ jobs:
               src/context/mod.rs|\
               src/ops/resolve.rs|\
               src/sources/git/source.rs|\
+              src/sources/git/utils.rs|\
               src/sources/registry/download.rs|\
               src/sources/registry/git_remote.rs|\
               src/sources/registry/http_remote.rs|\
@@ -111,6 +112,7 @@ jobs:
           export CARGO_TEST_DISABLE_NIGHTLY=1
           cargo test --test testsuite cache_lock::
           cargo test --test testsuite shared_locked_offline_sparse_resolve_uses_shared_lock
+          cargo test --test testsuite shared_locked_offline_git_
           cargo test --test testsuite registry_source_can_be_ephemeral
 
       - name: Workspace check
