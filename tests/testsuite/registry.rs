@@ -98,6 +98,124 @@ fn shared_locked_offline_sparse_resolve_uses_shared_lock() {
     );
 }
 
+fn only_git_checkout_ready_marker() -> PathBuf {
+    let root = paths::home().join(".cargo/git/checkouts");
+    let mut markers = Vec::new();
+    for repo in fs::read_dir(&root).unwrap() {
+        let repo = repo.unwrap();
+        if !repo.file_type().unwrap().is_dir() {
+            continue;
+        }
+        for checkout in fs::read_dir(repo.path()).unwrap() {
+            let checkout = checkout.unwrap();
+            if !checkout.file_type().unwrap().is_dir() {
+                continue;
+            }
+            let marker = checkout.path().join(".cargo-ok");
+            if marker.is_file() {
+                markers.push(marker);
+            }
+        }
+    }
+    assert_eq!(markers.len(), 1, "expected exactly one cached git checkout");
+    markers.pop().unwrap()
+}
+
+#[cargo_test]
+fn shared_locked_offline_git_resolve_uses_fresh_cached_checkout() {
+    let git_project = git::new("shared-git-dep", |p| {
+        p.file("Cargo.toml", &basic_manifest("shared-git-dep", "1.0.0"))
+            .file("src/lib.rs", "")
+    });
+    let p = project()
+        .file(
+            "Cargo.toml",
+            &format!(
+                r#"
+                [package]
+                name = "shared-git-root"
+                version = "0.1.0"
+                edition = "2024"
+
+                [dependencies]
+                shared-git-dep = {{ git = '{}' }}
+                "#,
+                git_project.url()
+            ),
+        )
+        .file("src/lib.rs", "")
+        .build();
+
+    p.cargo("fetch").run();
+    let marker = only_git_checkout_ready_marker();
+    assert!(marker.is_file());
+
+    let output = p
+        .cargo("metadata --locked --offline --format-version 1")
+        .env("CARGO_SHARED_LOCKED_OFFLINE_RESOLUTION", "1")
+        .env("CARGO_PACKAGE_CACHE_LOCK_TRACE", "1")
+        .exec_with_output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "metadata failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(marker.is_file(), "shared resolve must not replace the ready marker");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("mode=ResolveShared"),
+        "git resolver did not select ResolveShared:\n{stderr}"
+    );
+}
+
+#[cargo_test]
+fn shared_locked_offline_git_resolve_refuses_stale_checkout() {
+    let git_project = git::new("shared-git-dep", |p| {
+        p.file("Cargo.toml", &basic_manifest("shared-git-dep", "1.0.0"))
+            .file("src/lib.rs", "")
+    });
+    let p = project()
+        .file(
+            "Cargo.toml",
+            &format!(
+                r#"
+                [package]
+                name = "shared-git-root"
+                version = "0.1.0"
+                edition = "2024"
+
+                [dependencies]
+                shared-git-dep = {{ git = '{}' }}
+                "#,
+                git_project.url()
+            ),
+        )
+        .file("src/lib.rs", "")
+        .build();
+
+    p.cargo("fetch").run();
+    let marker = only_git_checkout_ready_marker();
+    fs::remove_file(&marker).unwrap();
+
+    let output = p
+        .cargo("metadata --locked --offline --format-version 1")
+        .env("CARGO_SHARED_LOCKED_OFFLINE_RESOLUTION", "1")
+        .exec_with_output()
+        .unwrap();
+    assert!(!output.status.success(), "stale git checkout unexpectedly succeeded");
+    assert!(
+        !marker.exists(),
+        "shared resolution must not repair a stale git checkout"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("missing or stale during shared locked/offline resolution"),
+        "unexpected stale-checkout failure:\n{stderr}"
+    );
+}
+
 #[cargo_test]
 fn simple_git() {
     simple(
