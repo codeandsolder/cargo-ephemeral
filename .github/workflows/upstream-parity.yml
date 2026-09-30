@@ -80,6 +80,7 @@ jobs:
               ci/fetch-smoke-test.sh|\
               ci/test-cargo-ephemeral-wrapper|\
               src/context/mod.rs|\
+              src/util/cache_lock.rs|\
               tests/testsuite/cargo_command.rs|\
               tests/testsuite/registry.rs)
                 ;;
