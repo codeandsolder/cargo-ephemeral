@@ -162,10 +162,7 @@ fn download_then_resolve_shared_separate() {
 )]
 #[cargo_test]
 fn resolve_shared_then_mutate_separate() {
-    a_then_b_separate_blocked(
-        CacheLockMode::ResolveShared,
-        CacheLockMode::MutateExclusive,
-    );
+    a_then_b_separate_blocked(CacheLockMode::ResolveShared, CacheLockMode::MutateExclusive);
 }
 
 #[cfg_attr(
@@ -174,10 +171,7 @@ fn resolve_shared_then_mutate_separate() {
 )]
 #[cargo_test]
 fn mutate_then_resolve_shared_separate() {
-    a_then_b_separate_blocked(
-        CacheLockMode::MutateExclusive,
-        CacheLockMode::ResolveShared,
-    );
+    a_then_b_separate_blocked(CacheLockMode::MutateExclusive, CacheLockMode::ResolveShared);
 }
 
 #[cfg_attr(
@@ -239,7 +233,6 @@ fn resolve_shared_then_download_without_bridge() {
         CacheLockMode::DownloadExclusive,
     );
 }
-
 
 #[cargo_test]
 #[should_panic(expected = "lock upgrade from shared to exclusive not supported")]
