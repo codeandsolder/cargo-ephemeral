@@ -252,9 +252,7 @@ impl<'gctx> GitSource<'gctx> {
                 .gctx
                 .package_cache_lock_is_held(CacheLockMode::DownloadExclusive)
         {
-            anyhow::bail!(
-                "git sources are not supported by shared locked/offline resolution"
-            );
+            anyhow::bail!("git sources are not supported by shared locked/offline resolution");
         }
         if self.path_source.borrow().is_some() {
             self.mark_used()?;
