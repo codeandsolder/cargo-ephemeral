@@ -138,7 +138,7 @@ pub(super) fn is_crate_downloaded(
     pkg: PackageId,
 ) -> bool {
     let path = cache_path.join(pkg.tarball_name());
-    let path = gctx.assert_package_cache_locked(CacheLockMode::DownloadExclusive, &path);
+    let path = gctx.assert_package_cache_locked(CacheLockMode::ResolveShared, &path);
     if let Ok(meta) = fs::metadata(path) {
         return meta.len() > 0;
     }
