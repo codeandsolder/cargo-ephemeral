@@ -548,8 +548,7 @@ pub fn resolve_with_previous<'gctx>(
         // acquire package exclusive, then release the mutate bridge.
         let gc_bridge = gctx.acquire_package_cache_lock(CacheLockMode::Shared)?;
         drop(resolver_lock);
-        let usage_lock =
-            gctx.acquire_package_cache_lock(CacheLockMode::DownloadExclusive)?;
+        let usage_lock = gctx.acquire_package_cache_lock(CacheLockMode::DownloadExclusive)?;
         drop(gc_bridge);
         deferred.save_no_error(gctx);
         drop(usage_lock);
