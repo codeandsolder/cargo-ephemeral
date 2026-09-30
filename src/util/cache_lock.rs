@@ -91,7 +91,7 @@ use super::FileLock;
 use crate::CargoResult;
 use crate::GlobalContext;
 use anyhow::Context as _;
-use std::io;
+use std::io::{self, Write as _};
 use std::panic::Location;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -434,8 +434,12 @@ struct LockTrace {
     recursive: bool,
 }
 
-fn lock_trace_enabled() -> bool {
-    std::env::var_os("CARGO_PACKAGE_CACHE_LOCK_TRACE").is_some()
+fn lock_trace_enabled(gctx: &GlobalContext) -> bool {
+    gctx.get_env_os("CARGO_PACKAGE_CACHE_LOCK_TRACE").is_some()
+}
+
+fn emit_lock_trace(args: std::fmt::Arguments<'_>) {
+    let _ = writeln!(io::stderr().lock(), "{args}");
 }
 
 /// A held lock guard.
@@ -472,7 +476,7 @@ impl Drop for CacheLock<'_> {
         drop(state);
 
         if let (Some(trace), Some(held)) = (&self.trace, held) {
-            eprintln!(
+            emit_lock_trace(format_args!(
                 "[cargo-package-lock] pid={} mode={:?} recursive={} wait_ms={:.3} held_ms={:.3} caller={}:{}:{}",
                 std::process::id(),
                 trace.mode,
@@ -482,7 +486,7 @@ impl Drop for CacheLock<'_> {
                 trace.caller.file(),
                 trace.caller.line(),
                 trace.caller.column(),
-            );
+            ));
         }
     }
 }
@@ -527,7 +531,7 @@ impl CacheLocker {
     /// cargo is holding the lock.
     #[track_caller]
     pub fn lock(&self, gctx: &GlobalContext, mode: CacheLockMode) -> CargoResult<CacheLock<'_>> {
-        let tracing = lock_trace_enabled();
+        let tracing = lock_trace_enabled(gctx);
         let started = tracing.then(Instant::now);
         let caller = tracing.then(Location::caller);
         let mut state = self.state.lock().unwrap();
@@ -561,7 +565,7 @@ impl CacheLocker {
         gctx: &GlobalContext,
         mode: CacheLockMode,
     ) -> CargoResult<Option<CacheLock<'_>>> {
-        let tracing = lock_trace_enabled();
+        let tracing = lock_trace_enabled(gctx);
         let started = tracing.then(Instant::now);
         let caller = tracing.then(Location::caller);
         let mut state = self.state.lock().unwrap();
@@ -587,7 +591,7 @@ impl CacheLocker {
             }))
         } else {
             if let (Some(started), Some(caller)) = (started, caller) {
-                eprintln!(
+                emit_lock_trace(format_args!(
                     "[cargo-package-lock] pid={} mode={:?} result=would-block wait_ms={:.3} caller={}:{}:{}",
                     std::process::id(),
                     mode,
@@ -595,7 +599,7 @@ impl CacheLocker {
                     caller.file(),
                     caller.line(),
                     caller.column(),
-                );
+                ));
             }
             Ok(None)
         }
