@@ -2132,6 +2132,7 @@ impl GlobalContext {
     ///
     /// See [`crate::util::cache_lock`] for an in-depth discussion of locking
     /// and lock modes.
+    #[track_caller]
     #[tracing::instrument(skip_all)]
     pub fn acquire_package_cache_lock(&self, mode: CacheLockMode) -> CargoResult<CacheLock<'_>> {
         self.package_cache_lock.lock(self, mode)
@@ -2142,6 +2143,7 @@ impl GlobalContext {
     ///
     /// See [`crate::util::cache_lock`] for an in-depth discussion of locking
     /// and lock modes.
+    #[track_caller]
     #[tracing::instrument(skip_all)]
     pub fn try_acquire_package_cache_lock(
         &self,
