@@ -671,16 +671,10 @@ impl CacheLocker {
             // shared, while DownloadExclusive/MutateExclusive are stronger.
             (CacheLockMode::ResolveShared, 1.., _, _) => true,
             (CacheLockMode::Shared, _, 1.., _) => true,
-            (CacheLockMode::MutateExclusive, 1.., 1.., true)
-                if state.cache_lock.is_exclusive =>
-            {
+            (CacheLockMode::MutateExclusive, 1.., 1.., true) if state.cache_lock.is_exclusive => {
                 true
             }
-            (CacheLockMode::DownloadExclusive, 1.., _, _)
-                if state.cache_lock.is_exclusive =>
-            {
-                true
-            }
+            (CacheLockMode::DownloadExclusive, 1.., _, _) if state.cache_lock.is_exclusive => true,
             _ => false,
         }
     }
