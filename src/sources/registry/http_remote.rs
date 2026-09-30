@@ -163,7 +163,7 @@ impl<'gctx> HttpRegistry<'gctx> {
                 trace!("config loaded");
                 let config = Some(serde_json::from_slice(&raw_data)?);
                 if paths::create_dir_all(&config_json_path.parent().unwrap()).is_ok() {
-                    if let Err(e) = fs::write(&config_json_path, &raw_data) {
+                    if let Err(e) = paths::write_atomic(&config_json_path, &raw_data) {
                         tracing::debug!("failed to write config.json cache: {}", e);
                     }
                 }
