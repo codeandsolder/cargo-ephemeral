@@ -162,7 +162,12 @@ impl<'gctx> HttpRegistry<'gctx> {
             } => {
                 trace!("config loaded");
                 let config = Some(serde_json::from_slice(&raw_data)?);
-                if paths::create_dir_all(&config_json_path.parent().unwrap()).is_ok() {
+                if self
+                    .inner()
+                    .gctx
+                    .package_cache_lock_is_held(CacheLockMode::DownloadExclusive)
+                    && paths::create_dir_all(&config_json_path.parent().unwrap()).is_ok()
+                {
                     if let Err(e) = paths::write_atomic(&config_json_path, &raw_data) {
                         tracing::debug!("failed to write config.json cache: {}", e);
                     }
@@ -257,7 +262,7 @@ impl<'gctx> RegistryData for HttpRegistry<'gctx> {
     fn assert_index_locked<'a>(&self, path: &'a Filesystem) -> &'a Path {
         self.inner()
             .gctx
-            .assert_package_cache_locked(CacheLockMode::DownloadExclusive, path)
+            .assert_package_cache_locked(CacheLockMode::ResolveShared, path)
     }
 
     fn is_updated(&self) -> bool {
