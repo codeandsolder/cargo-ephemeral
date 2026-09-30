@@ -32,6 +32,7 @@ fn a_b_nested(a: CacheLockMode, b: CacheLockMode) {
     drop(lock2);
     drop(lock1);
     // Verify locks were unlocked.
+    verify_lock_is_ok(CacheLockMode::ResolveShared);
     verify_lock_is_ok(CacheLockMode::Shared);
     verify_lock_is_ok(CacheLockMode::DownloadExclusive);
     verify_lock_is_ok(CacheLockMode::MutateExclusive);
@@ -217,6 +218,28 @@ fn download_then_shared() {
     // This sequence is not supported.
     a_b_nested(CacheLockMode::DownloadExclusive, CacheLockMode::Shared);
 }
+
+#[cargo_test]
+#[should_panic(expected = "lock is not allowed")]
+fn download_then_resolve_shared() {
+    // This would invert the mutate->package ordering and can deadlock with GC.
+    a_b_nested(
+        CacheLockMode::DownloadExclusive,
+        CacheLockMode::ResolveShared,
+    );
+}
+
+#[cargo_test]
+#[should_panic(expected = "lock upgrade from shared to exclusive not supported")]
+fn resolve_shared_then_download_without_bridge() {
+    // The safe handoff must first retain mutate-shared via a normal Shared
+    // bridge and drop ResolveShared before taking DownloadExclusive.
+    a_b_nested(
+        CacheLockMode::ResolveShared,
+        CacheLockMode::DownloadExclusive,
+    );
+}
+
 
 #[cargo_test]
 #[should_panic(expected = "lock upgrade from shared to exclusive not supported")]
