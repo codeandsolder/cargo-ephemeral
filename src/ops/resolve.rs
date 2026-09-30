@@ -417,7 +417,10 @@ pub fn resolve_with_previous<'gctx>(
     // packages may instead take a shared read lock. Lower-level mutation paths
     // still require a genuinely exclusive DownloadExclusive lock, so a missed
     // write is rejected rather than silently racing.
-    let shared_locked_offline = std::env::var_os("CARGO_SHARED_LOCKED_OFFLINE_RESOLUTION").is_some()
+    let shared_locked_offline = ws
+        .gctx()
+        .get_env_os("CARGO_SHARED_LOCKED_OFFLINE_RESOLUTION")
+        .is_some()
         && previous.is_some()
         && !ws.gctx().network_allowed()
         && !ws.gctx().lock_update_allowed()
