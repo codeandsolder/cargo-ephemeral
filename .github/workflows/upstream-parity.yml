@@ -89,6 +89,7 @@ jobs:
               src/sources/registry/index/cache.rs|\
               src/sources/registry/mod.rs|\
               src/util/cache_lock.rs|\
+              src/workspace/package.rs|\
               tests/testsuite/cache_lock.rs|\
               tests/testsuite/cargo_command.rs|\
               tests/testsuite/registry.rs)
