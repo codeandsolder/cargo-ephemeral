@@ -250,24 +250,36 @@ impl<'gctx> GitSource<'gctx> {
             return Ok(());
         }
 
-        let git_fs = self.gctx.git_path();
-        // Ignore errors creating it, in case this is a read-only filesystem:
-        // perhaps the later operations can succeed anyhow.
-        let _ = git_fs.create_dir();
-        let git_path = self
+        let shared_resolver_only = self
             .gctx
-            .assert_package_cache_locked(CacheLockMode::DownloadExclusive, &git_fs);
+            .package_cache_lock_is_held(CacheLockMode::ResolveShared)
+            && !self
+                .gctx
+                .package_cache_lock_is_held(CacheLockMode::DownloadExclusive);
 
-        // Before getting a checkout, make sure that `<cargo_home>/git` is
-        // marked as excluded from indexing and backups. Older versions of Cargo
-        // didn't do this, so we do it here regardless of whether `<cargo_home>`
-        // exists.
-        //
-        // This does not use `create_dir_all_excluded_from_backups_atomic` for
-        // the same reason: we want to exclude it even if the directory already
-        // exists.
-        exclude_from_backups_and_indexing(&git_path);
+        let git_fs = self.gctx.git_path();
+        if shared_resolver_only {
+            // Read-only resolution may inspect an already-populated git cache,
+            // but it must never create, repair, fetch, or checkout anything.
+            self.gctx
+                .assert_package_cache_locked(CacheLockMode::ResolveShared, &git_fs);
+        } else {
+            // Ignore errors creating it, in case this is a read-only filesystem:
+            // perhaps the later operations can succeed anyhow.
+            let _ = git_fs.create_dir();
+            let git_path = self
+                .gctx
+                .assert_package_cache_locked(CacheLockMode::DownloadExclusive, &git_fs);
 
+            // Before getting a checkout, make sure that `<cargo_home>/git` is
+            // marked as excluded from indexing and backups. Older versions of Cargo
+            // didn't do this, so we do it here regardless of whether `<cargo_home>`
+            // exists.
+            exclude_from_backups_and_indexing(&git_path);
+        }
+
+        // In offline mode this is read-only when the exact locked object is
+        // already in the git DB, and fails rather than fetching when missing.
         let (db, actual_rev) = self.fetch_db(false)?;
 
         // Don’t use the full hash, in order to contribute less to reaching the
@@ -275,16 +287,25 @@ impl<'gctx> GitSource<'gctx> {
         // <https://github.com/servo/servo/pull/14397>.
         let short_id = db.to_short_id(actual_rev)?;
 
-        // Check out `actual_rev` from the database to a scoped location on the
-        // filesystem. This will use hard links and such to ideally make the
-        // checkout operation here pretty fast.
         let checkout_path = self
             .gctx
             .git_checkouts_path()
             .join(&self.ident)
             .join(short_id.as_str());
         let checkout_path = checkout_path.into_path_unlocked();
-        db.copy_to(actual_rev, &checkout_path, self.gctx, self.quiet)?;
+
+        if shared_resolver_only {
+            if !db.checkout_is_fresh(actual_rev, &checkout_path) {
+                anyhow::bail!(
+                    "cached git checkout for {} at {} is missing or stale during shared locked/offline resolution",
+                    self.remote.url(),
+                    actual_rev
+                );
+            }
+        } else {
+            // Repair/create the checkout only under DownloadExclusive.
+            db.copy_to(actual_rev, &checkout_path, self.gctx, self.quiet)?;
+        }
 
         let source_id = self
             .source_id
