@@ -415,19 +415,49 @@ pub fn resolve_with_previous<'gctx>(
     // may lazily mutate registry/git caches. A locked + offline resolve with an
     // existing graph can opt into a read-only shared mode; lower-level write
     // paths still require DownloadExclusive and will reject a missed mutation.
-    let shared_locked_offline = ws
-        .gctx()
-        .get_env_os("CARGO_SHARED_LOCKED_OFFLINE_RESOLUTION")
-        .is_some()
-        && previous.is_some()
-        && !ws.gctx().network_allowed()
-        && !ws.gctx().lock_update_allowed();
-    let cache_lock_mode = if shared_locked_offline {
-        CacheLockMode::ResolveShared
+    let locked_offline =
+        previous.is_some() && !ws.gctx().network_allowed() && !ws.gctx().lock_update_allowed();
+    let force_shared = locked_offline
+        && ws
+            .gctx()
+            .get_env_os("CARGO_SHARED_LOCKED_OFFLINE_RESOLUTION")
+            .is_some();
+    let adaptive_shared = locked_offline
+        && ws
+            .gctx()
+            .get_env_os("CARGO_ADAPTIVE_LOCKED_OFFLINE_RESOLUTION")
+            .is_some();
+
+    // Forced shared mode is useful for validation/debugging. Adaptive mode keeps
+    // the normal exclusive fast path whenever it is immediately available, and
+    // only falls back to read-only shared resolution when exclusivity would
+    // actually block behind another Cargo.
+    let (resolver_lock, resolver_is_shared) = if force_shared {
+        (
+            ws.gctx()
+                .acquire_package_cache_lock(CacheLockMode::ResolveShared)?,
+            true,
+        )
+    } else if adaptive_shared {
+        if let Some(lock) = ws
+            .gctx()
+            .try_acquire_package_cache_lock(CacheLockMode::DownloadExclusive)?
+        {
+            (lock, false)
+        } else {
+            (
+                ws.gctx()
+                    .acquire_package_cache_lock(CacheLockMode::ResolveShared)?,
+                true,
+            )
+        }
     } else {
-        CacheLockMode::DownloadExclusive
+        (
+            ws.gctx()
+                .acquire_package_cache_lock(CacheLockMode::DownloadExclusive)?,
+            false,
+        )
     };
-    let resolver_lock = ws.gctx().acquire_package_cache_lock(cache_lock_mode)?;
 
     // Some packages are already loaded when setting up a workspace. This
     // makes it so anything that was already loaded will not be loaded again.
@@ -540,7 +570,7 @@ pub fn resolve_with_previous<'gctx>(
     }
     let gctx = ws.gctx();
     let mut deferred = gctx.deferred_global_last_use()?;
-    if shared_locked_offline {
+    if resolver_is_shared {
         // Last-use tracking flushes SQLite state. Bridge the read-only resolver
         // lock to DownloadExclusive without ever exposing a window to
         // MutateExclusive GC: keep mutate shared, release package shared,

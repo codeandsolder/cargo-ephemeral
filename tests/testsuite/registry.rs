@@ -98,6 +98,51 @@ fn shared_locked_offline_sparse_resolve_uses_shared_lock() {
     );
 }
 
+#[cargo_test]
+fn adaptive_locked_offline_prefers_uncontended_exclusive_lock() {
+    let _server = setup_http();
+    let p = project()
+        .file(
+            "Cargo.toml",
+            r#"
+                [package]
+                name = "adaptive-resolver-registry-smoke"
+                version = "0.1.0"
+                edition = "2024"
+
+                [dependencies]
+                bar = "0.0.1"
+            "#,
+        )
+        .file("src/lib.rs", "")
+        .build();
+
+    Package::new("bar", "0.0.1").publish();
+    p.cargo("fetch").run();
+
+    let output = p
+        .cargo("metadata --locked --offline --format-version 1")
+        .env("CARGO_ADAPTIVE_LOCKED_OFFLINE_RESOLUTION", "1")
+        .env("CARGO_PACKAGE_CACHE_LOCK_TRACE", "1")
+        .exec_with_output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "metadata failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("mode=DownloadExclusive"),
+        "adaptive resolver did not keep the uncontended exclusive fast path:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("mode=ResolveShared"),
+        "adaptive resolver unexpectedly selected shared mode without contention:\n{stderr}"
+    );
+}
+
 fn only_registry_source_ready_marker(package_dir: &str) -> PathBuf {
     let root = paths::home().join(".cargo/registry/src");
     let mut markers = Vec::new();

@@ -113,6 +113,7 @@ jobs:
           export CARGO_TEST_DISABLE_NIGHTLY=1
           cargo test --test testsuite cache_lock::
           cargo test --test testsuite shared_locked_offline_sparse_resolve_uses_shared_lock
+          cargo test --test testsuite adaptive_locked_offline_prefers_uncontended_exclusive_lock
           cargo test --test testsuite shared_locked_offline_git_
           cargo test --test testsuite registry_source_can_be_ephemeral
 
