@@ -138,6 +138,7 @@ jobs:
           if-no-files-found: error
 
       - name: Promote rebased branch
+        if: github.ref == 'refs/heads/master'
         run: |
           new_head=$(git rev-parse HEAD)
           if [ "$new_head" != "$OLD_HEAD" ]; then
@@ -145,7 +146,7 @@ jobs:
           fi
 
       - name: Close recovered parity issue
-        if: success()
+        if: success() && github.ref == 'refs/heads/master'
         run: |
           issue=$(gh api "repos/$GITHUB_REPOSITORY/issues?state=open&per_page=100" |
             jq -r --arg title "$PARITY_ISSUE_TITLE" '.[] | select(.pull_request | not) | select(.title == $title) | .number' |
@@ -157,7 +158,7 @@ jobs:
           fi
 
       - name: Report parity failure
-        if: failure()
+        if: failure() && github.ref == 'refs/heads/master'
         run: |
           git rebase --abort >/dev/null 2>&1 || true
           {
