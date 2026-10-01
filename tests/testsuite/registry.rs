@@ -98,6 +98,164 @@ fn shared_locked_offline_sparse_resolve_uses_shared_lock() {
     );
 }
 
+fn only_registry_source_ready_marker(package_dir: &str) -> PathBuf {
+    let root = paths::home().join(".cargo/registry/src");
+    let mut markers = Vec::new();
+    for registry in fs::read_dir(&root).unwrap() {
+        let registry = registry.unwrap();
+        if !registry.file_type().unwrap().is_dir() {
+            continue;
+        }
+        let marker = registry.path().join(package_dir).join(".cargo-ok");
+        if marker.is_file() {
+            markers.push(marker);
+        }
+    }
+    assert_eq!(
+        markers.len(),
+        1,
+        "expected exactly one cached source marker for {package_dir}"
+    );
+    markers.pop().unwrap()
+}
+
+fn only_registry_archive(filename: &str) -> PathBuf {
+    let root = paths::home().join(".cargo/registry/cache");
+    let mut archives = Vec::new();
+    for registry in fs::read_dir(&root).unwrap() {
+        let registry = registry.unwrap();
+        if !registry.file_type().unwrap().is_dir() {
+            continue;
+        }
+        let archive = registry.path().join(filename);
+        if archive.is_file() {
+            archives.push(archive);
+        }
+    }
+    assert_eq!(
+        archives.len(),
+        1,
+        "expected exactly one cached registry archive for {filename}"
+    );
+    archives.pop().unwrap()
+}
+
+#[cargo_test]
+fn shared_locked_offline_package_load_refuses_missing_archive() {
+    let _server = setup_http();
+    let p = project()
+        .file(
+            "Cargo.toml",
+            r#"
+                [package]
+                name = "shared-package-load-missing-archive"
+                version = "0.1.0"
+                edition = "2024"
+
+                [dependencies]
+                bar = "0.0.1"
+            "#,
+        )
+        .file("src/lib.rs", "")
+        .build();
+
+    Package::new("bar", "0.0.1").publish();
+    p.cargo("fetch").run();
+
+    let archive = only_registry_archive("bar-0.0.1.crate");
+    fs::remove_file(&archive).unwrap();
+
+    p.cargo("metadata --locked --offline --format-version 1")
+        .env("CARGO_SHARED_LOCKED_OFFLINE_RESOLUTION", "1")
+        .with_status(101)
+        .with_stderr_contains(
+            "[..]cached crate `bar v0.0.1[..]` is missing or empty during shared locked/offline package loading[..]",
+        )
+        .run();
+    assert!(
+        !archive.exists(),
+        "shared package loading must not recreate a missing archive"
+    );
+}
+
+#[cargo_test]
+fn shared_locked_offline_package_load_refuses_missing_source() {
+    let _server = setup_http();
+    let p = project()
+        .file(
+            "Cargo.toml",
+            r#"
+                [package]
+                name = "shared-package-load-missing-source"
+                version = "0.1.0"
+                edition = "2024"
+
+                [dependencies]
+                bar = "0.0.1"
+            "#,
+        )
+        .file("src/lib.rs", "")
+        .build();
+
+    Package::new("bar", "0.0.1").publish();
+    p.cargo("fetch").run();
+
+    let marker = only_registry_source_ready_marker("bar-0.0.1");
+    let source_dir = marker.parent().unwrap().to_path_buf();
+    fs::remove_dir_all(&source_dir).unwrap();
+
+    p.cargo("metadata --locked --offline --format-version 1")
+        .env("CARGO_SHARED_LOCKED_OFFLINE_RESOLUTION", "1")
+        .with_status(101)
+        .with_stderr_contains(
+            "[..]cached source for `bar v0.0.1[..]` is missing during shared locked/offline package loading[..]",
+        )
+        .run();
+    assert!(
+        !source_dir.exists(),
+        "shared package loading must not recreate a missing source tree"
+    );
+}
+
+#[cargo_test]
+fn shared_locked_offline_package_load_refuses_corrupt_source_marker() {
+    let _server = setup_http();
+    let p = project()
+        .file(
+            "Cargo.toml",
+            r#"
+                [package]
+                name = "shared-package-load-corrupt-source"
+                version = "0.1.0"
+                edition = "2024"
+
+                [dependencies]
+                bar = "0.0.1"
+            "#,
+        )
+        .file("src/lib.rs", "")
+        .build();
+
+    Package::new("bar", "0.0.1").publish();
+    p.cargo("fetch").run();
+
+    let marker = only_registry_source_ready_marker("bar-0.0.1");
+    fs::write(&marker, "corrupt").unwrap();
+
+    p.cargo("metadata --locked --offline --format-version 1")
+        .env("CARGO_SHARED_LOCKED_OFFLINE_RESOLUTION", "1")
+        .with_status(101)
+        .with_stderr_contains(
+            "[..]cached source for `bar v0.0.1[..]` is incomplete during shared locked/offline package loading[..]",
+        )
+        .run();
+    assert_eq!(
+        fs::read_to_string(&marker).unwrap(),
+        "corrupt",
+        "shared package loading must not repair a corrupt source marker"
+    );
+}
+
 fn only_git_checkout_ready_marker() -> PathBuf {
     let root = paths::home().join(".cargo/git/checkouts");
     let mut markers = Vec::new();
