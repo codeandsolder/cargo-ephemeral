@@ -415,9 +415,8 @@ pub fn resolve_with_previous<'gctx>(
     // may lazily mutate registry/git caches. A locked + offline resolve with an
     // existing graph can opt into a read-only shared mode; lower-level write
     // paths still require DownloadExclusive and will reject a missed mutation.
-    let locked_offline = previous.is_some()
-        && !ws.gctx().network_allowed()
-        && !ws.gctx().lock_update_allowed();
+    let locked_offline =
+        previous.is_some() && !ws.gctx().network_allowed() && !ws.gctx().lock_update_allowed();
     let force_shared = locked_offline
         && ws
             .gctx()
