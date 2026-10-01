@@ -205,7 +205,7 @@ fn shared_locked_offline_git_resolve_refuses_stale_checkout() {
     p.cargo("metadata --locked --offline --format-version 1")
         .env("CARGO_SHARED_LOCKED_OFFLINE_RESOLUTION", "1")
         .with_status(101)
-        .with_stderr_contains("missing or stale during shared locked/offline resolution")
+        .with_stderr_contains("[..]missing or stale during shared locked/offline resolution[..]")
         .run();
     assert!(
         !marker.exists(),
