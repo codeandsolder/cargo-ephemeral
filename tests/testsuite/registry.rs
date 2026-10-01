@@ -202,23 +202,14 @@ fn shared_locked_offline_git_resolve_refuses_stale_checkout() {
     let marker = only_git_checkout_ready_marker();
     fs::remove_file(&marker).unwrap();
 
-    let output = p
-        .cargo("metadata --locked --offline --format-version 1")
+    p.cargo("metadata --locked --offline --format-version 1")
         .env("CARGO_SHARED_LOCKED_OFFLINE_RESOLUTION", "1")
-        .exec_with_output()
-        .unwrap();
-    assert!(
-        !output.status.success(),
-        "stale git checkout unexpectedly succeeded"
-    );
+        .with_status(101)
+        .with_stderr_contains("missing or stale during shared locked/offline resolution")
+        .run();
     assert!(
         !marker.exists(),
         "shared resolution must not repair a stale git checkout"
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("missing or stale during shared locked/offline resolution"),
-        "unexpected stale-checkout failure:\n{stderr}"
     );
 }
 
