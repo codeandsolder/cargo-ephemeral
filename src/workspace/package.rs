@@ -348,18 +348,44 @@ impl<'a, 'gctx> Downloads<'a, 'gctx> {
             ProgressStyle::Ratio,
             set.gctx,
         ));
-        let shared_locked_offline = set
-            .gctx
-            .get_env_os("CARGO_SHARED_LOCKED_OFFLINE_RESOLUTION")
-            .is_some()
-            && !set.gctx.network_allowed()
-            && !set.gctx.lock_update_allowed();
-        let cache_lock_mode = if shared_locked_offline {
-            CacheLockMode::ResolveShared
+        let locked_offline = !set.gctx.network_allowed() && !set.gctx.lock_update_allowed();
+        let force_shared = locked_offline
+            && set
+                .gctx
+                .get_env_os("CARGO_SHARED_LOCKED_OFFLINE_RESOLUTION")
+                .is_some();
+        let adaptive_shared = locked_offline
+            && set
+                .gctx
+                .get_env_os("CARGO_ADAPTIVE_LOCKED_OFFLINE_RESOLUTION")
+                .is_some();
+
+        let (package_lock, package_lock_is_shared) = if force_shared {
+            (
+                set.gctx
+                    .acquire_package_cache_lock(CacheLockMode::ResolveShared)?,
+                true,
+            )
+        } else if adaptive_shared {
+            if let Some(lock) = set
+                .gctx
+                .try_acquire_package_cache_lock(CacheLockMode::DownloadExclusive)?
+            {
+                (lock, false)
+            } else {
+                (
+                    set.gctx
+                        .acquire_package_cache_lock(CacheLockMode::ResolveShared)?,
+                    true,
+                )
+            }
         } else {
-            CacheLockMode::DownloadExclusive
+            (
+                set.gctx
+                    .acquire_package_cache_lock(CacheLockMode::DownloadExclusive)?,
+                false,
+            )
         };
-        let package_lock = set.gctx.acquire_package_cache_lock(cache_lock_mode)?;
         let dl = Downloads {
             set,
             progress,
@@ -373,7 +399,7 @@ impl<'a, 'gctx> Downloads<'a, 'gctx> {
         let packages = dl.run(ids).await?;
 
         let mut deferred = set.gctx.deferred_global_last_use()?;
-        if shared_locked_offline {
+        if package_lock_is_shared {
             // Package loading above is read-only in shared mode. Flush last-use
             // bookkeeping under a short exclusive handoff while keeping GC out.
             let gc_bridge = set.gctx.acquire_package_cache_lock(CacheLockMode::Shared)?;
