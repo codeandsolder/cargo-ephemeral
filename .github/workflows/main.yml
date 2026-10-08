@@ -66,7 +66,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
-    - run: rustup update stable && rustup default stable
+    - run: rustup toolchain install 1.99.0 --profile minimal && rustup default 1.99.0
     - run: rustup component add rustfmt
     - run: cargo fmt --all --check
 
@@ -81,7 +81,7 @@ jobs:
       CARGO_BUILD_WARNINGS: deny
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
-      - run: rustup update stable && rustup default stable
+      - run: rustup toolchain install 1.99.0 --profile minimal && rustup default 1.99.0
       - run: rustup component add clippy
       - run: cargo clippy --workspace --all-targets --no-deps --keep-going
 
@@ -89,14 +89,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
-      - run: rustup update stable && rustup default stable
+      - run: rustup toolchain install 1.99.0 --profile minimal && rustup default 1.99.0
       - run: cargo stale-label
 
   lint-docs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
-      - run: rustup update stable && rustup default stable
+      - run: rustup toolchain install 1.99.0 --profile minimal && rustup default 1.99.0
       - run: cargo lint-docs --check
 
   # Ensure Cargo.lock is up-to-date
@@ -104,7 +104,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
-      - run: rustup update stable && rustup default stable
+      - run: rustup toolchain install 1.99.0 --profile minimal && rustup default 1.99.0
       - run: cargo update -p cargo --locked
 
   check-version-bump:
@@ -117,7 +117,7 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
         with:
           fetch-depth: 0
-      - run: rustup update stable && rustup default stable
+      - run: rustup toolchain install 1.99.0 --profile minimal && rustup default 1.99.0
       - name: Install cargo-semver-checks
         run: |
           mkdir installed-bins
@@ -138,7 +138,7 @@ jobs:
       RUSTUP_WINDOWS_PATH_ADD_BIN: 0
     strategy:
       matrix:
-        include: ${{ fromJSON(startsWith(github.ref, 'refs/tags/') && '[{"name":"Linux x86_64 stable","os":"ubuntu-latest","rust":"stable","other":"i686-unknown-linux-gnu"},{"name":"Linux x86_64 beta","os":"ubuntu-latest","rust":"beta","other":"i686-unknown-linux-gnu"},{"name":"Linux x86_64 nightly","os":"ubuntu-latest","rust":"nightly","other":"i686-unknown-linux-gnu"},{"name":"Linux aarch64 stable","os":"ubuntu-24.04-arm","rust":"stable","other":"TODO"},{"name":"Linux aarch64 nightly","os":"ubuntu-24.04-arm","rust":"nightly","other":"TODO"},{"name":"macOS aarch64 stable","os":"macos-15","rust":"stable","other":"x86_64-apple-darwin"},{"name":"macOS aarch64 nightly","os":"macos-15","rust":"nightly","other":"x86_64-apple-darwin"},{"name":"Windows x86_64 MSVC stable","os":"windows-latest","rust":"stable-msvc","target_env":"msvc","other":"i686-pc-windows-msvc"},{"name":"Windows x86_64 MSVC nightly","os":"windows-latest","rust":"nightly-msvc","target_env":"msvc","other":"i686-pc-windows-msvc"},{"name":"Windows aarch64 MSVC stable","os":"windows-11-arm","rust":"stable-msvc","target_env":"msvc","other":"i686-pc-windows-msvc"},{"name":"Windows aarch64 MSVC nightly","os":"windows-11-arm","rust":"nightly-msvc","target_env":"msvc","other":"i686-pc-windows-msvc"},{"name":"Windows x86_64 gnu nightly","os":"windows-latest","rust":"nightly-gnu","target_env":"gnu","other":"i686-pc-windows-gnu"}]' || '[{"name":"Linux x86_64 stable","os":"ubuntu-latest","rust":"stable","other":"i686-unknown-linux-gnu"}]') }}
+        include: ${{ fromJSON(startsWith(github.ref, 'refs/tags/') && '[{"name":"Linux x86_64 stable","os":"ubuntu-latest","rust":"stable","other":"i686-unknown-linux-gnu"},{"name":"Linux x86_64 beta","os":"ubuntu-latest","rust":"beta","other":"i686-unknown-linux-gnu"},{"name":"Linux x86_64 nightly","os":"ubuntu-latest","rust":"nightly","other":"i686-unknown-linux-gnu"},{"name":"Linux aarch64 stable","os":"ubuntu-24.04-arm","rust":"stable","other":"TODO"},{"name":"Linux aarch64 nightly","os":"ubuntu-24.04-arm","rust":"nightly","other":"TODO"},{"name":"macOS aarch64 stable","os":"macos-15","rust":"stable","other":"x86_64-apple-darwin"},{"name":"macOS aarch64 nightly","os":"macos-15","rust":"nightly","other":"x86_64-apple-darwin"},{"name":"Windows x86_64 MSVC stable","os":"windows-latest","rust":"stable-msvc","target_env":"msvc","other":"i686-pc-windows-msvc"},{"name":"Windows x86_64 MSVC nightly","os":"windows-latest","rust":"nightly-msvc","target_env":"msvc","other":"i686-pc-windows-msvc"},{"name":"Windows aarch64 MSVC stable","os":"windows-11-arm","rust":"stable-msvc","target_env":"msvc","other":"i686-pc-windows-msvc"},{"name":"Windows aarch64 MSVC nightly","os":"windows-11-arm","rust":"nightly-msvc","target_env":"msvc","other":"i686-pc-windows-msvc"},{"name":"Windows x86_64 gnu nightly","os":"windows-latest","rust":"nightly-gnu","target_env":"gnu","other":"i686-pc-windows-gnu"}]' || '[{"name":"Linux x86_64 Rust 1.99","os":"ubuntu-latest","rust":"1.99.0","other":"i686-unknown-linux-gnu"}]') }}
     name: Tests ${{ matrix.name }}
     steps:
     - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
@@ -152,7 +152,7 @@ jobs:
     # Some tests require stable. Make sure it is set to the most recent stable
     # so that we can predictably handle updates if necessary (and not randomly
     # when GitHub updates its image).
-    - run: rustup update --no-self-update stable
+    - run: rustup toolchain install 1.99.0 --profile minimal
     - run: rustup update --no-self-update ${{ matrix.rust }} && rustup default ${{ matrix.rust }}
     - run: rustup target add ${{ matrix.other }}
       if: matrix.os != 'ubuntu-24.04-arm' # cross-compile tests are disabled on ARM machines
@@ -228,14 +228,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
-    - run: rustup update stable && rustup default stable
+    - run: rustup toolchain install 1.99.0 --profile minimal && rustup default 1.99.0
     - run: cargo test -p cargo-util-schemas -F unstable-schema
 
   resolver:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
-    - run: rustup update stable && rustup default stable
+    - run: rustup toolchain install 1.99.0 --profile minimal && rustup default 1.99.0
     - run: cargo test -p resolver-tests
 
   build_std:
