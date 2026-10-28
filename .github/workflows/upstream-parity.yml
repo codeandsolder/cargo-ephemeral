@@ -94,6 +94,10 @@ jobs:
               tests/testsuite/cache_lock.rs|\
               tests/testsuite/cargo_command.rs|\
               tests/testsuite/build_dir.rs|\
+              tests/testsuite/cargo_add/mod.rs|\
+              tests/testsuite/cargo_add/target_triple/*|\
+              tests/testsuite/cargo_remove/mod.rs|\
+              tests/testsuite/cargo_remove/target_triple/*|\
               tests/testsuite/registry.rs)
                 ;;
               *)
@@ -117,6 +121,7 @@ jobs:
           cargo test --test testsuite shared_locked_offline_sparse_resolve_uses_shared_lock
           cargo test --test testsuite shared_locked_offline_git_
           cargo test --test testsuite registry_source_can_be_ephemeral
+          cargo test --test testsuite target_triple::case
 
       - name: Workspace check
         run: cargo check --workspace --all-targets
