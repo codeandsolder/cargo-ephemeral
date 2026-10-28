@@ -80,6 +80,7 @@ jobs:
               ci/fetch-smoke-test.sh|\
               ci/test-cargo-ephemeral-wrapper|\
               src/context/mod.rs|\
+              src/context/schema.rs|\
               src/ops/resolve.rs|\
               src/sources/git/source.rs|\
               src/sources/git/utils.rs|\
@@ -92,6 +93,7 @@ jobs:
               src/workspace/package.rs|\
               tests/testsuite/cache_lock.rs|\
               tests/testsuite/cargo_command.rs|\
+              tests/testsuite/build_dir.rs|\
               tests/testsuite/registry.rs)
                 ;;
               *)
@@ -168,7 +170,7 @@ jobs:
             echo "- Fork before run: ${OLD_HEAD:-unknown}"
             echo "- Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             echo
-            echo "An agent should preserve the ephemeral-registry semantics and downstream CI policy documented in EPHEMERAL_REGISTRY.md; upstream wins everywhere else."
+            echo "An agent should preserve the downstream ephemeral Cargo semantics and CI policy documented in EPHEMERAL_REGISTRY.md; upstream wins everywhere else."
           } > /tmp/parity-issue.md
           issue=$(gh api "repos/$GITHUB_REPOSITORY/issues?state=open&per_page=100" |
             jq -r --arg title "$PARITY_ISSUE_TITLE" '.[] | select(.pull_request | not) | select(.title == $title) | .number' |

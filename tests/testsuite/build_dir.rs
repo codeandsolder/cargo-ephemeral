@@ -215,6 +215,66 @@ fn should_default_to_target() {
 }
 
 #[cargo_test]
+fn ephemeral_intermediates_are_removed_after_build() {
+    let p = project()
+        .file("src/main.rs", r#"fn main() { println!("Hello, World!") }"#)
+        .build();
+    let temp = p.root().join("tmp");
+    temp.mkdir_p();
+
+    p.cargo("build")
+        .env("CARGO_BUILD_EPHEMERAL_INTERMEDIATES", "true")
+        .env("TMPDIR", &temp)
+        .enable_mac_dsym()
+        .run();
+
+    assert_exists(&p.root().join(format!("target/debug/foo{EXE_SUFFIX}")));
+    assert!(!p.root().join("target/debug/build").exists());
+    assert!(!p.root().join("target/debug/deps").exists());
+    assert!(
+        std::fs::read_dir(&temp).unwrap().next().is_none(),
+        "ephemeral build root should be removed when Cargo exits"
+    );
+}
+
+#[cargo_test]
+fn explicit_build_dir_overrides_ephemeral_intermediates() {
+    let p = project()
+        .file("src/main.rs", r#"fn main() { println!("Hello, World!") }"#)
+        .build();
+
+    p.cargo("build")
+        .env("CARGO_BUILD_EPHEMERAL_INTERMEDIATES", "true")
+        .env("CARGO_BUILD_BUILD_DIR", "persistent-build")
+        .enable_mac_dsym()
+        .run();
+
+    assert_exists(&p.root().join(format!("target/debug/foo{EXE_SUFFIX}")));
+    assert!(p.root().join("persistent-build/debug/build").exists());
+}
+
+#[cargo_test]
+fn ephemeral_intermediates_can_be_disabled() {
+    let p = project()
+        .file("src/main.rs", r#"fn main() { println!("Hello, World!") }"#)
+        .file(
+            ".cargo/config.toml",
+            r#"
+            [build]
+            ephemeral-intermediates = true
+            "#,
+        )
+        .build();
+
+    p.cargo("build")
+        .env("CARGO_BUILD_EPHEMERAL_INTERMEDIATES", "false")
+        .enable_mac_dsym()
+        .run();
+
+    assert!(p.root().join("target/debug/build").exists());
+}
+
+#[cargo_test]
 fn should_respect_env_var() {
     let p = project()
         .file("src/main.rs", r#"fn main() { println!("Hello, World!") }"#)
