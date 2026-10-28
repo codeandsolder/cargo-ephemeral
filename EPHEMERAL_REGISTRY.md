@@ -66,3 +66,15 @@ fail immediately emit `result=would-block`.
 The diagnostic is disabled by default and does not change lock semantics.
 It is intended for profiling coarse `.package-cache` contention before making
 locking behavior changes.
+
+## Ephemeral intermediate build artifacts
+
+The fork also adds `build.ephemeral-intermediates`. When enabled and no explicit
+`build.build-dir` is configured, Cargo places intermediate build state in a
+process-scoped temporary directory and removes it when the Cargo process exits.
+Final artifacts remain in the normal target directory through Cargo's native
+build-dir artifact uplift.
+
+An explicit `build.build-dir` always wins and therefore acts as the persistence
+opt-in for hot development loops. The setting can also be overridden per
+invocation with `CARGO_BUILD_EPHEMERAL_INTERMEDIATES=false`.

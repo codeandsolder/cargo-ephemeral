@@ -272,6 +272,9 @@ pub struct GlobalContext {
     future_incompat_config: OnceLock<CargoFutureIncompatConfig>,
     net_config: OnceLock<CargoNetConfig>,
     build_config: OnceLock<CargoBuildConfig>,
+    /// Process-scoped root for downstream ephemeral intermediate build artifacts.
+    /// Keeping the `TempDir` here makes cleanup follow the Cargo process lifetime.
+    ephemeral_build_root: OnceLock<tempfile::TempDir>,
     target_cfgs: OnceLock<Vec<(String, TargetCfgConfig)>>,
     doc_extern_map: OnceLock<RustdocExternMap>,
     progress_config: ProgressConfig,
@@ -401,6 +404,7 @@ impl GlobalContext {
             future_incompat_config: Default::default(),
             net_config: Default::default(),
             build_config: Default::default(),
+            ephemeral_build_root: Default::default(),
             target_cfgs: Default::default(),
             doc_extern_map: Default::default(),
             progress_config: ProgressConfig::default(),
@@ -755,11 +759,39 @@ impl GlobalContext {
     ///
     /// Callers should prefer [`Workspace::build_dir`] instead.
     pub fn build_dir(&self, workspace_manifest_path: &Path) -> CargoResult<Option<Filesystem>> {
-        let Some(val) = &self.build_config()?.build_dir else {
-            return Ok(None);
-        };
-        self.custom_build_dir(val, workspace_manifest_path)
-            .map(Some)
+        let build_config = self.build_config()?;
+        if let Some(val) = &build_config.build_dir {
+            return self
+                .custom_build_dir(val, workspace_manifest_path)
+                .map(Some);
+        }
+
+        if build_config.ephemeral_intermediates.unwrap_or(false) {
+            return self.ephemeral_build_dir(workspace_manifest_path).map(Some);
+        }
+
+        Ok(None)
+    }
+
+    /// Returns a process-scoped temporary build directory for a workspace.
+    ///
+    /// The directory is rooted in the platform temporary directory and is owned by
+    /// [`GlobalContext`], so all intermediates are removed when the Cargo process
+    /// exits. A workspace-specific hash keeps multiple workspaces handled by one
+    /// Cargo invocation isolated from each other.
+    fn ephemeral_build_dir(&self, workspace_manifest_path: &Path) -> CargoResult<Filesystem> {
+        let root = self.ephemeral_build_root.try_borrow_with(|| {
+            tempfile::Builder::new()
+                .prefix("cargo-ephemeral-build-")
+                .tempdir()
+                .context(
+                    "failed to create temporary directory for Cargo intermediate build artifacts",
+                )
+        })?;
+        let real_path = std::fs::canonicalize(workspace_manifest_path)
+            .unwrap_or_else(|_err| workspace_manifest_path.to_owned());
+        let hash = crate::util::hex::short_hash(&real_path);
+        Ok(Filesystem::new(root.path().join(hash)))
     }
 
     /// The directory to use for intermediate build artifacts.

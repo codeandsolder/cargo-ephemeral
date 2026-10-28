@@ -412,6 +412,9 @@ pub struct CargoBuildConfig {
     pub dep_info_basedir: Option<ConfigRelativePath>,
     pub target_dir: Option<ConfigRelativePath>,
     pub build_dir: Option<ConfigRelativePath>,
+    /// codeandsolder/cargo-ephemeral: store intermediate build artifacts in a
+    /// process-scoped temporary directory unless an explicit `build-dir` is set.
+    pub ephemeral_intermediates: Option<bool>,
     pub incremental: Option<bool>,
     pub target: Option<BuildTargetConfig>,
     pub profile: Option<ProfileName>,
