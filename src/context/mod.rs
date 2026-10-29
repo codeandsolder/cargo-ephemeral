@@ -257,8 +257,9 @@ pub struct GlobalContext {
     net_config: OnceLock<CargoNetConfig>,
     build_config: OnceLock<CargoBuildConfig>,
     /// Process-scoped root for downstream ephemeral intermediate build artifacts.
-    /// Keeping the `TempDir` here makes cleanup follow the Cargo process lifetime.
-    ephemeral_build_root: OnceLock<tempfile::TempDir>,
+    /// Keeping the owner here makes cleanup and the tmpfiles exclusion lock follow
+    /// the Cargo process lifetime.
+    ephemeral_build_root: OnceLock<EphemeralBuildRoot>,
     target_cfgs: OnceLock<Vec<(String, TargetCfgConfig)>>,
     doc_extern_map: OnceLock<RustdocExternMap>,
     progress_config: ProgressConfig,
@@ -286,6 +287,69 @@ pub struct GlobalContext {
     /// A cache of modifications to make to [`GlobalContext::global_cache_tracker`],
     /// saved to disk in a batch to improve performance.
     deferred_global_last_use: OnceLock<Mutex<DeferredGlobalLastUse>>,
+}
+
+#[derive(Debug)]
+struct EphemeralBuildRoot {
+    tempdir: tempfile::TempDir,
+    #[cfg(target_os = "linux")]
+    _cleanup_lock: std::fs::File,
+}
+
+impl EphemeralBuildRoot {
+    fn new() -> CargoResult<Self> {
+        let tempdir = tempfile::Builder::new()
+            .prefix("cargo-ephemeral-build-")
+            .tempdir()
+            .context(
+                "failed to create temporary directory for Cargo intermediate build artifacts",
+            )?;
+
+        #[cfg(target_os = "linux")]
+        let cleanup_lock = {
+            use std::os::fd::AsRawFd;
+
+            let file = std::fs::File::open(tempdir.path())
+                .context("failed to open ephemeral build root for cleanup locking")?;
+            // SAFETY: the opened file owns a valid directory fd for the duration of the call.
+            let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+            if rc != 0 {
+                return Err(std::io::Error::last_os_error())
+                    .context("failed to lock ephemeral build root against tmpfiles cleanup");
+            }
+            file
+        };
+
+        Ok(Self {
+            tempdir,
+            #[cfg(target_os = "linux")]
+            _cleanup_lock: cleanup_lock,
+        })
+    }
+
+    fn path(&self) -> &Path {
+        self.tempdir.path()
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod ephemeral_build_root_tests {
+    use super::EphemeralBuildRoot;
+    use std::os::fd::AsRawFd;
+
+    #[test]
+    fn holds_cleanup_flock_for_lifetime() {
+        let root = EphemeralBuildRoot::new().unwrap();
+        let competing = std::fs::File::open(root.path()).unwrap();
+
+        // SAFETY: `competing` owns a valid directory fd for the duration of the call.
+        let rc = unsafe { libc::flock(competing.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        assert_eq!(rc, -1);
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::EWOULDBLOCK),
+        );
+    }
 }
 
 impl GlobalContext {
@@ -810,14 +874,9 @@ impl GlobalContext {
     /// exits. A workspace-specific hash keeps multiple workspaces handled by one
     /// Cargo invocation isolated from each other.
     fn ephemeral_build_dir(&self, workspace_manifest_path: &Path) -> CargoResult<Filesystem> {
-        let root = self.ephemeral_build_root.try_borrow_with(|| {
-            tempfile::Builder::new()
-                .prefix("cargo-ephemeral-build-")
-                .tempdir()
-                .context(
-                    "failed to create temporary directory for Cargo intermediate build artifacts",
-                )
-        })?;
+        let root = self
+            .ephemeral_build_root
+            .try_borrow_with(EphemeralBuildRoot::new)?;
         let real_path = std::fs::canonicalize(workspace_manifest_path)
             .unwrap_or_else(|_err| workspace_manifest_path.to_owned());
         let hash = crate::util::hex::short_hash(&real_path);
