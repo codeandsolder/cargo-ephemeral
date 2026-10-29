@@ -76,7 +76,7 @@ impl LockServer {
 
     fn run(mut self) {
         while let Ok((client, _)) = self.listener.accept() {
-            if self.done.load(Ordering::SeqCst) {
+            if self.done.load(Ordering::Relaxed) {
                 break;
             }
 
@@ -147,7 +147,7 @@ impl Drop for LockServer {
 
 impl Drop for LockServerStarted {
     fn drop(&mut self) {
-        self.done.store(true, Ordering::SeqCst);
+        self.done.store(true, Ordering::Relaxed);
         // Ignore errors here as this is largely best-effort
         if TcpStream::connect(&self.addr).is_err() {
             return;
