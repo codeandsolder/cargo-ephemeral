@@ -256,6 +256,9 @@ pub struct GlobalContext {
     future_incompat_config: OnceLock<CargoFutureIncompatConfig>,
     net_config: OnceLock<CargoNetConfig>,
     build_config: OnceLock<CargoBuildConfig>,
+    /// Process-scoped root for downstream ephemeral intermediate build artifacts.
+    /// Keeping the `TempDir` here makes cleanup follow the Cargo process lifetime.
+    ephemeral_build_root: OnceLock<tempfile::TempDir>,
     target_cfgs: OnceLock<Vec<(String, TargetCfgConfig)>>,
     doc_extern_map: OnceLock<RustdocExternMap>,
     progress_config: ProgressConfig,
@@ -385,6 +388,7 @@ impl GlobalContext {
             future_incompat_config: Default::default(),
             net_config: Default::default(),
             build_config: Default::default(),
+            ephemeral_build_root: Default::default(),
             target_cfgs: Default::default(),
             doc_extern_map: Default::default(),
             progress_config: ProgressConfig::default(),
@@ -462,9 +466,19 @@ impl GlobalContext {
         self.registry_base_path().join("cache")
     }
 
-    /// Gets the Cargo registry source directory (`<cargo_home>/registry/src`).
+    /// Gets the Cargo registry source directory.
+    ///
+    /// If `EPHEMERAL_CARGO_REGISTRY_SRC` is set, registry packages are extracted
+    /// below that directory instead of `<cargo_home>/registry/src`. The caller
+    /// owns the lifetime of the override directory. This lets a wrapper keep
+    /// Cargo's verified `.crate` cache persistent while making extracted source
+    /// process-scoped scratch.
     pub fn registry_source_path(&self) -> Filesystem {
-        self.registry_base_path().join("src")
+        if let Some(path) = self.env.get_env_os("EPHEMERAL_CARGO_REGISTRY_SRC") {
+            Filesystem::new(PathBuf::from(path))
+        } else {
+            self.registry_base_path().join("src")
+        }
     }
 
     /// Gets the default Cargo registry.
@@ -533,6 +547,13 @@ impl GlobalContext {
     pub fn cargo_exe(&self) -> CargoResult<&Path> {
         self.cargo_exe
             .try_borrow_with(|| {
+                // The ephemeral-registry deployment may invoke a real Cargo binary
+                // through a site wrapper. External subcommands call back through
+                // `$CARGO`; let the wrapper explicitly remain that callback target.
+                if let Some(wrapper) = self.get_env_os("EPHEMERAL_CARGO_WRAPPER") {
+                    return Ok(PathBuf::from(wrapper));
+                }
+
                 let from_env = || -> CargoResult<PathBuf> {
                     // Try re-using the `cargo` set in the environment already. This allows
                     // commands that use Cargo as a library to inherit (via `cargo <subcommand>`)
@@ -768,11 +789,39 @@ impl GlobalContext {
     ///
     /// Callers should prefer [`Workspace::build_dir`] instead.
     pub fn build_dir(&self, workspace_manifest_path: &Path) -> CargoResult<Option<Filesystem>> {
-        let Some(val) = &self.build_config()?.build_dir else {
-            return Ok(None);
-        };
-        self.custom_build_dir(val, workspace_manifest_path)
-            .map(Some)
+        let build_config = self.build_config()?;
+        if let Some(val) = &build_config.build_dir {
+            return self
+                .custom_build_dir(val, workspace_manifest_path)
+                .map(Some);
+        }
+
+        if build_config.ephemeral_intermediates.unwrap_or(false) {
+            return self.ephemeral_build_dir(workspace_manifest_path).map(Some);
+        }
+
+        Ok(None)
+    }
+
+    /// Returns a process-scoped temporary build directory for a workspace.
+    ///
+    /// The directory is rooted in the platform temporary directory and is owned by
+    /// [`GlobalContext`], so all intermediates are removed when the Cargo process
+    /// exits. A workspace-specific hash keeps multiple workspaces handled by one
+    /// Cargo invocation isolated from each other.
+    fn ephemeral_build_dir(&self, workspace_manifest_path: &Path) -> CargoResult<Filesystem> {
+        let root = self.ephemeral_build_root.try_borrow_with(|| {
+            tempfile::Builder::new()
+                .prefix("cargo-ephemeral-build-")
+                .tempdir()
+                .context(
+                    "failed to create temporary directory for Cargo intermediate build artifacts",
+                )
+        })?;
+        let real_path = std::fs::canonicalize(workspace_manifest_path)
+            .unwrap_or_else(|_err| workspace_manifest_path.to_owned());
+        let hash = crate::util::hex::short_hash(&real_path);
+        Ok(Filesystem::new(root.path().join(hash)))
     }
 
     /// The directory to use for intermediate build artifacts.
@@ -2031,7 +2080,11 @@ impl GlobalContext {
             "package cache lock is not currently held, Cargo forgot to call \
              `acquire_package_cache_lock` before we got to this stack frame",
         );
-        assert!(ret.starts_with(self.home_path.as_path_unlocked()));
+        let registry_source_path = self.registry_source_path();
+        assert!(
+            ret.starts_with(self.home_path.as_path_unlocked())
+                || ret.starts_with(registry_source_path.as_path_unlocked())
+        );
         ret
     }
 
@@ -2040,6 +2093,7 @@ impl GlobalContext {
     ///
     /// See [`crate::util::cache_lock`] for an in-depth discussion of locking
     /// and lock modes.
+    #[track_caller]
     #[tracing::instrument(skip_all)]
     pub fn acquire_package_cache_lock(&self, mode: CacheLockMode) -> CargoResult<CacheLock<'_>> {
         self.package_cache_lock.lock(self, mode)
@@ -2050,12 +2104,18 @@ impl GlobalContext {
     ///
     /// See [`crate::util::cache_lock`] for an in-depth discussion of locking
     /// and lock modes.
+    #[track_caller]
     #[tracing::instrument(skip_all)]
     pub fn try_acquire_package_cache_lock(
         &self,
         mode: CacheLockMode,
     ) -> CargoResult<Option<CacheLock<'_>>> {
         self.package_cache_lock.try_lock(self, mode)
+    }
+
+    /// Returns whether this process currently holds a compatible package-cache lock.
+    pub(crate) fn package_cache_lock_is_held(&self, mode: CacheLockMode) -> bool {
+        self.package_cache_lock.is_locked(mode)
     }
 
     /// Returns a reference to the shared [`GlobalCacheTracker`].
