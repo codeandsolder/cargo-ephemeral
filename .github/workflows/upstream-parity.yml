@@ -81,10 +81,14 @@ jobs:
               .github/workflows/shared-sccache.yml|\
               .github/workflows/upstream-parity.yml|\
               EPHEMERAL_REGISTRY.md|\
+              contrib/codeandsolder/cargo-ephemeral-tmpfiles-clean.service|\
+              contrib/codeandsolder/cargo-ephemeral-tmpfiles-clean.timer|\
+              contrib/codeandsolder/cargo-ephemeral-tmpfiles.conf|\
               ci/cargo-ephemeral-wrapper|\
               ci/clean-test-output.sh|\
               ci/fetch-smoke-test.sh|\
               ci/test-cargo-ephemeral-wrapper|\
+              src/bin/cargo/main.rs|\
               src/context/mod.rs|\
               src/context/schema.rs|\
               src/ops/resolve.rs|\
@@ -96,6 +100,9 @@ jobs:
               src/sources/registry/index/cache.rs|\
               src/sources/registry/mod.rs|\
               src/util/cache_lock.rs|\
+              src/util/diagnostic_server.rs|\
+              src/util/flock.rs|\
+              src/util/lockserver.rs|\
               src/workspace/package.rs|\
               tests/testsuite/cache_lock.rs|\
               tests/testsuite/cargo_command.rs|\
