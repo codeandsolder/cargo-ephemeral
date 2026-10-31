@@ -1,0 +1,10 @@
+[Unit]
+Description=Periodically clean stale cargo-ephemeral intermediate build roots
+
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=15min
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

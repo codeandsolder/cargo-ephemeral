@@ -193,6 +193,17 @@ impl GitDatabase {
         Ok(checkout)
     }
 
+    /// Returns true when `dest` is an existing, completed checkout of `rev`.
+    ///
+    /// This mirrors the read-only fast path in `copy_to` without repairing
+    /// or recreating stale state.
+    pub fn checkout_is_fresh(&self, rev: git2::Oid, dest: &Path) -> bool {
+        git2::Repository::open(dest)
+            .ok()
+            .map(|repo| GitCheckout::new(self, rev, repo))
+            .is_some_and(|checkout| checkout.is_fresh())
+    }
+
     /// Get a short OID for a `revision`, 7 chars or more if ambiguous.
     ///
     /// Like [`git2::Object::short_id`]

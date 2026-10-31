@@ -483,8 +483,14 @@ impl<'gctx> RegistrySource<'gctx> {
         // IO errors in creating and marking it are ignored, e.g. in case we're on a
         // read-only filesystem.
         let registry_base = gctx.registry_base_path();
-        let _ = registry_base.create_dir();
-        cargo_util::paths::exclude_from_backups_and_indexing(&registry_base.into_path_unlocked());
+        let shared_resolver_only = gctx.package_cache_lock_is_held(CacheLockMode::ResolveShared)
+            && !gctx.package_cache_lock_is_held(CacheLockMode::DownloadExclusive);
+        if !shared_resolver_only {
+            let _ = registry_base.create_dir();
+            cargo_util::paths::exclude_from_backups_and_indexing(
+                &registry_base.into_path_unlocked(),
+            );
+        }
 
         RegistrySource {
             name: name.into(),
@@ -555,10 +561,16 @@ impl<'gctx> RegistrySource<'gctx> {
     fn unpack_package(&self, pkg: PackageId, tarball: &File) -> CargoResult<PathBuf> {
         let package_dir = format!("{}-{}", pkg.name(), pkg.version());
         let dst = self.src_path.join(&package_dir);
-        let path = dst.join(PACKAGE_SOURCE_LOCK);
+        let lock_path = dst.join(PACKAGE_SOURCE_LOCK);
+        let shared_resolver_only = self
+            .gctx
+            .package_cache_lock_is_held(CacheLockMode::ResolveShared)
+            && !self
+                .gctx
+                .package_cache_lock_is_held(CacheLockMode::DownloadExclusive);
         let path = self
             .gctx
-            .assert_package_cache_locked(CacheLockMode::DownloadExclusive, &path);
+            .assert_package_cache_locked(CacheLockMode::ResolveShared, &lock_path);
         let unpack_dir = path.parent().unwrap();
         match fs::read_to_string(path) {
             Ok(ok) => match serde_json::from_str::<LockMetadata>(&ok) {
@@ -573,6 +585,12 @@ impl<'gctx> RegistrySource<'gctx> {
                     return Ok(unpack_dir.to_path_buf());
                 }
                 _ => {
+                    if shared_resolver_only {
+                        anyhow::bail!(
+                            "cached source for `{}` is incomplete during shared locked/offline package loading",
+                            pkg
+                        );
+                    }
                     if ok == "ok" {
                         tracing::debug!("old `ok` content found, clearing cache");
                     } else {
@@ -582,9 +600,19 @@ impl<'gctx> RegistrySource<'gctx> {
                     paths::remove_dir_all(dst.as_path_unlocked())?;
                 }
             },
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                if shared_resolver_only {
+                    anyhow::bail!(
+                        "cached source for `{}` is missing during shared locked/offline package loading",
+                        pkg
+                    );
+                }
+            }
             Err(e) => anyhow::bail!("unable to read .cargo-ok file at {path:?}: {e}"),
         }
+
+        self.gctx
+            .assert_package_cache_locked(CacheLockMode::DownloadExclusive, &lock_path);
         dst.create_dir()?;
 
         let bytes_written = unpack(self.gctx, tarball, unpack_dir, &|_| true)?;
