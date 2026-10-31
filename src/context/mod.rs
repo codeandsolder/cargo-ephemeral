@@ -289,70 +289,178 @@ pub struct GlobalContext {
     deferred_global_last_use: OnceLock<Mutex<DeferredGlobalLastUse>>,
 }
 
+const EPHEMERAL_BUILD_ROOT_PREFIX: &str = "cargo-ephemeral-build-";
+#[cfg(target_os = "linux")]
+const EPHEMERAL_BUILD_ROOT_LEASE: &str = ".cargo-owner.lock";
+#[cfg(all(target_os = "linux", not(target_env = "musl")))]
+const EPHEMERAL_BUILD_ROOT_READY: &str = ".cargo-owner.ready";
+
 #[derive(Debug)]
 struct EphemeralBuildRoot {
-    tempdir: tempfile::TempDir,
+    dir: Option<tempfile::TempDir>,
     #[cfg(target_os = "linux")]
-    _cleanup_lock: std::fs::File,
+    lease: Option<File>,
 }
 
 impl EphemeralBuildRoot {
     fn new() -> CargoResult<Self> {
-        let tempdir = tempfile::Builder::new()
-            .prefix("cargo-ephemeral-build-")
+        let dir = tempfile::Builder::new()
+            .prefix(EPHEMERAL_BUILD_ROOT_PREFIX)
             .tempdir()
             .context(
                 "failed to create temporary directory for Cargo intermediate build artifacts",
             )?;
 
         #[cfg(target_os = "linux")]
-        let cleanup_lock = {
-            use std::os::fd::AsRawFd;
+        let lease = {
+            let lease_path = dir.path().join(EPHEMERAL_BUILD_ROOT_LEASE);
+            let file = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .open(&lease_path)
+                .with_context(|| {
+                    format!(
+                        "failed to create ephemeral build root lease at {}",
+                        lease_path.display()
+                    )
+                })?;
+            crate::util::flock::lock_exclusive(&file).with_context(|| {
+                format!(
+                    "failed to lock ephemeral build root lease at {}",
+                    lease_path.display()
+                )
+            })?;
 
-            let file = std::fs::File::open(tempdir.path())
-                .context("failed to open ephemeral build root for cleanup locking")?;
-            // SAFETY: the opened file owns a valid directory fd for the duration of the call.
-            let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-            if rc != 0 {
-                return Err(std::io::Error::last_os_error())
-                    .context("failed to lock ephemeral build root against tmpfiles cleanup");
+            let lease_inheritable = match Self::make_lease_inheritable(&file) {
+                Ok(()) => true,
+                Err(err) => {
+                    tracing::debug!(
+                        path = %lease_path.display(),
+                        %err,
+                        "failed to make ephemeral build root lease inheritable; crash reaping disabled for this root"
+                    );
+                    false
+                }
+            };
+
+            #[cfg(target_env = "musl")]
+            let _ = lease_inheritable;
+
+            #[cfg(not(target_env = "musl"))]
+            if lease_inheritable {
+                match crate::util::flock::is_on_nfs_mount_checked(dir.path()) {
+                    Ok(true) => {
+                        tracing::debug!(
+                            path = %dir.path().display(),
+                            "ephemeral build root is on NFS; crash reaping disabled"
+                        );
+                    }
+                    Ok(false) => {
+                        let ready_path = dir.path().join(EPHEMERAL_BUILD_ROOT_READY);
+                        if let Err(err) = std::fs::write(&ready_path, []) {
+                            tracing::debug!(
+                                path = %ready_path.display(),
+                                %err,
+                                "failed to publish ephemeral build root; crash reaping disabled for this root"
+                            );
+                        }
+                    }
+                    Err(err) => {
+                        tracing::debug!(
+                            path = %dir.path().display(),
+                            %err,
+                            "could not verify temporary filesystem type; crash reaping disabled for this root"
+                        );
+                    }
+                }
             }
-            file
+
+            Some(file)
         };
 
         Ok(Self {
-            tempdir,
+            dir: Some(dir),
             #[cfg(target_os = "linux")]
-            _cleanup_lock: cleanup_lock,
+            lease,
         })
     }
 
     fn path(&self) -> &Path {
-        self.tempdir.path()
+        self.dir
+            .as_ref()
+            .expect("ephemeral build root is live")
+            .path()
+    }
+
+    #[cfg(target_os = "linux")]
+    fn make_lease_inheritable(file: &File) -> std::io::Result<()> {
+        use std::os::fd::AsRawFd;
+
+        let fd = file.as_raw_fd();
+        // SAFETY: `fd` belongs to `file` for the duration of these calls.
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+        if flags == -1 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // Keep the lease open across exec so build scripts, compiler wrappers,
+        // and other descendants keep the root owned if Cargo itself dies.
+        // SAFETY: same valid descriptor as above; F_SETFD does not take ownership.
+        if unsafe { libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) } == -1 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(())
+    }
+}
+
+impl Drop for EphemeralBuildRoot {
+    fn drop(&mut self) {
+        // Close our lease before removing the directory. Descendants may still
+        // hold inherited copies after abnormal parent termination.
+        #[cfg(target_os = "linux")]
+        drop(self.lease.take());
+
+        if let Some(dir) = self.dir.take() {
+            let path = dir.path().to_owned();
+            if let Err(err) = dir.close() {
+                tracing::debug!(
+                    path = %path.display(),
+                    %err,
+                    "failed to remove ephemeral build root during normal cleanup"
+                );
+            }
+        }
     }
 }
 
 #[cfg(all(test, target_os = "linux"))]
 mod ephemeral_build_root_tests {
-    use super::EphemeralBuildRoot;
-    use std::os::fd::AsRawFd;
+    use super::{EPHEMERAL_BUILD_ROOT_LEASE, EphemeralBuildRoot};
 
     #[test]
-    fn holds_cleanup_flock_for_lifetime() {
+    fn holds_cleanup_lease_for_lifetime() {
         let root = EphemeralBuildRoot::new().unwrap();
-        let competing = std::fs::File::open(root.path()).unwrap();
+        let competing = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(root.path().join(EPHEMERAL_BUILD_ROOT_LEASE))
+            .unwrap();
 
-        // SAFETY: `competing` owns a valid directory fd for the duration of the call.
-        let rc = unsafe { libc::flock(competing.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-        assert_eq!(rc, -1);
-        assert_eq!(
-            std::io::Error::last_os_error().raw_os_error(),
-            Some(libc::EWOULDBLOCK),
-        );
+        assert!(matches!(
+            crate::util::flock::try_lock_exclusive(&competing),
+            Err(std::fs::TryLockError::WouldBlock)
+        ));
     }
 }
 
 impl GlobalContext {
+    /// Drops the process-scoped ephemeral build root before a top-level
+    /// `process::exit`, which otherwise skips Rust destructors.
+    #[doc(hidden)]
+    pub fn cleanup_ephemeral_build_root(&mut self) {
+        drop(self.ephemeral_build_root.take());
+    }
+
     /// Creates a new config instance.
     ///
     /// This is typically used for tests or other special cases. `default` is
@@ -869,19 +977,107 @@ impl GlobalContext {
 
     /// Returns a process-scoped temporary build directory for a workspace.
     ///
-    /// The directory is rooted in the platform temporary directory and is owned by
-    /// [`GlobalContext`], so all intermediates are removed when the Cargo process
-    /// exits. A workspace-specific hash keeps multiple workspaces handled by one
-    /// Cargo invocation isolated from each other.
+    /// Normal return/unwind removes the root through [`tempfile::TempDir`]. On
+    /// Linux a kernel-backed lease also protects the root from host tmpfiles
+    /// cleanup. Linux/glibc descendants inherit that lease across `exec`; roots
+    /// are published for crash reaping only when the filesystem is proven not
+    /// to be NFS and inheritance setup succeeds.
     fn ephemeral_build_dir(&self, workspace_manifest_path: &Path) -> CargoResult<Filesystem> {
-        let root = self
-            .ephemeral_build_root
-            .try_borrow_with(EphemeralBuildRoot::new)?;
+        let root = self.ephemeral_build_root.try_borrow_with(|| {
+            Self::reap_abandoned_ephemeral_build_roots();
+            EphemeralBuildRoot::new()
+        })?;
         let real_path = std::fs::canonicalize(workspace_manifest_path)
             .unwrap_or_else(|_err| workspace_manifest_path.to_owned());
         let hash = crate::util::hex::short_hash(&real_path);
         Ok(Filesystem::new(root.path().join(hash)))
     }
+
+    #[cfg(all(target_os = "linux", not(target_env = "musl")))]
+    fn reap_abandoned_ephemeral_build_roots() {
+        use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+
+        let temp_dir = env::temp_dir();
+        let Ok(entries) = std::fs::read_dir(&temp_dir) else {
+            return;
+        };
+        // SAFETY: `geteuid` has no preconditions and does not mutate process state.
+        let euid = unsafe { libc::geteuid() };
+
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            if !name
+                .to_string_lossy()
+                .starts_with(EPHEMERAL_BUILD_ROOT_PREFIX)
+            {
+                continue;
+            }
+
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if !file_type.is_dir() {
+                continue;
+            }
+
+            let root = entry.path();
+            let Ok(root_metadata) = entry.metadata() else {
+                continue;
+            };
+            if root_metadata.uid() != euid {
+                continue;
+            }
+
+            let ready_path = root.join(EPHEMERAL_BUILD_ROOT_READY);
+            let Ok(ready_metadata) = std::fs::symlink_metadata(&ready_path) else {
+                continue;
+            };
+            if !ready_metadata.file_type().is_file() || ready_metadata.uid() != euid {
+                continue;
+            }
+
+            let lease_path = root.join(EPHEMERAL_BUILD_ROOT_LEASE);
+            let Ok(lease) = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .custom_flags(libc::O_NOFOLLOW)
+                .open(&lease_path)
+            else {
+                continue;
+            };
+            let Ok(lease_metadata) = lease.metadata() else {
+                continue;
+            };
+            if !lease_metadata.is_file() || lease_metadata.uid() != euid {
+                continue;
+            }
+
+            match crate::util::flock::try_lock_exclusive(&lease) {
+                Ok(()) => {
+                    // Keep the lease held through deletion so another Cargo reaper
+                    // or systemd-tmpfiles cannot race this cleanup.
+                    if let Err(err) = std::fs::remove_dir_all(&root) {
+                        tracing::debug!(
+                            path = %root.display(),
+                            %err,
+                            "failed to reap abandoned ephemeral build root"
+                        );
+                    }
+                }
+                Err(std::fs::TryLockError::WouldBlock) => {}
+                Err(std::fs::TryLockError::Error(err)) => {
+                    tracing::debug!(
+                        path = %lease_path.display(),
+                        %err,
+                        "failed to inspect ephemeral build root lease"
+                    );
+                }
+            }
+        }
+    }
+
+    #[cfg(not(all(target_os = "linux", not(target_env = "musl"))))]
+    fn reap_abandoned_ephemeral_build_roots() {}
 
     /// The directory to use for intermediate build artifacts.
     ///
