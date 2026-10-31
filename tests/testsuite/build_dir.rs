@@ -301,6 +301,179 @@ fn target_dir_inside_build_dir() {
 }
 
 #[cargo_test]
+fn ephemeral_intermediates_are_removed_after_build() {
+    let p = project()
+        .file("src/main.rs", r#"fn main() { println!("Hello, World!") }"#)
+        .build();
+    let temp = p.root().join("tmp");
+    temp.mkdir_p();
+
+    p.cargo("build")
+        .env("CARGO_BUILD_EPHEMERAL_INTERMEDIATES", "true")
+        .env("TMPDIR", &temp)
+        .enable_mac_dsym()
+        .run();
+
+    assert_exists(&p.root().join(format!("target/debug/foo{EXE_SUFFIX}")));
+    assert!(!p.root().join("target/debug/build").exists());
+    assert!(!p.root().join("target/debug/deps").exists());
+    assert!(
+        std::fs::read_dir(&temp).unwrap().next().is_none(),
+        "ephemeral build root should be removed when Cargo exits"
+    );
+}
+
+#[cargo_test]
+#[cfg(all(target_os = "linux", not(target_env = "musl")))]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "test simulates an independent process holding the lease"
+)]
+fn ephemeral_intermediates_reap_abandoned_but_not_live_roots() {
+    use std::fs::OpenOptions;
+
+    const PREFIX: &str = "cargo-ephemeral-build-";
+    const READY: &str = ".cargo-owner.ready";
+
+    let p = project()
+        .file("src/main.rs", r#"fn main() { println!("Hello, World!") }"#)
+        .build();
+    let temp = p.root().join("tmp");
+    temp.mkdir_p();
+
+    let unpublished = temp.join(format!("{PREFIX}unpublished"));
+    unpublished.mkdir_p();
+    std::fs::write(unpublished.join("junk"), b"not-yet-published").unwrap();
+    let abandoned = temp.join(format!("{PREFIX}abandoned"));
+    abandoned.mkdir_p();
+    std::fs::write(abandoned.join("junk"), b"stale").unwrap();
+    std::fs::write(abandoned.join(READY), b"").unwrap();
+
+    let live = temp.join(format!("{PREFIX}live"));
+    live.mkdir_p();
+    std::fs::write(live.join("junk"), b"live").unwrap();
+    let live_lock = OpenOptions::new().read(true).open(&live).unwrap();
+    live_lock.lock().unwrap();
+    std::fs::write(live.join(READY), b"").unwrap();
+
+    p.cargo("build")
+        .env("CARGO_BUILD_EPHEMERAL_INTERMEDIATES", "true")
+        .env("TMPDIR", &temp)
+        .enable_mac_dsym()
+        .run();
+
+    assert!(
+        !abandoned.exists(),
+        "unlocked abandoned root should be reaped"
+    );
+    assert!(live.exists(), "locked live root must not be reaped");
+    assert!(
+        unpublished.exists(),
+        "root without ready marker must never be guessed abandoned"
+    );
+
+    std::fs::remove_dir_all(&unpublished).unwrap();
+    drop(live_lock);
+    p.cargo("build")
+        .env("CARGO_BUILD_EPHEMERAL_INTERMEDIATES", "true")
+        .env("TMPDIR", &temp)
+        .enable_mac_dsym()
+        .run();
+    assert!(
+        !live.exists(),
+        "released root should be reaped on the next run"
+    );
+    assert!(
+        std::fs::read_dir(&temp).unwrap().next().is_none(),
+        "only live or current ephemeral roots may remain"
+    );
+}
+
+#[cargo_test]
+#[cfg(target_os = "linux")]
+fn ephemeral_intermediates_root_lock_is_inherited_by_build_scripts() {
+    let p = project()
+        .file(
+            "build.rs",
+            r#"
+fn main() {
+    let inherited = std::fs::read_dir("/proc/self/fd")
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter_map(|entry| std::fs::read_link(entry.path()).ok())
+        .any(|path| path.to_string_lossy().contains("cargo-ephemeral-build-"));
+    println!("cargo:warning=ephemeral-root-lock-inherited={inherited}");
+}
+"#,
+        )
+        .file("src/main.rs", "fn main() {}")
+        .build();
+
+    p.cargo("build")
+        .env("CARGO_BUILD_EPHEMERAL_INTERMEDIATES", "true")
+        .with_stderr_contains("[WARNING] foo@0.0.1: ephemeral-root-lock-inherited=true")
+        .run();
+}
+
+#[cargo_test]
+fn ephemeral_intermediates_are_removed_after_failed_build() {
+    let p = project()
+        .file("src/main.rs", r#"compile_error!("expected failure");"#)
+        .build();
+    let temp = p.root().join("tmp");
+    temp.mkdir_p();
+
+    p.cargo("build")
+        .env("CARGO_BUILD_EPHEMERAL_INTERMEDIATES", "true")
+        .env("TMPDIR", &temp)
+        .with_status(101)
+        .with_stderr_contains("[ERROR] expected failure")
+        .run();
+
+    assert!(
+        std::fs::read_dir(&temp).unwrap().next().is_none(),
+        "ordinary Cargo errors should drop the TempDir before exiting"
+    );
+}
+
+#[cargo_test]
+fn explicit_build_dir_overrides_ephemeral_intermediates() {
+    let p = project()
+        .file("src/main.rs", r#"fn main() { println!("Hello, World!") }"#)
+        .build();
+
+    p.cargo("build")
+        .env("CARGO_BUILD_EPHEMERAL_INTERMEDIATES", "true")
+        .env("CARGO_BUILD_BUILD_DIR", "persistent-build")
+        .enable_mac_dsym()
+        .run();
+
+    assert_exists(&p.root().join(format!("target/debug/foo{EXE_SUFFIX}")));
+    assert!(p.root().join("persistent-build/debug/build").exists());
+}
+
+#[cargo_test]
+fn ephemeral_intermediates_can_be_disabled() {
+    let p = project()
+        .file("src/main.rs", r#"fn main() { println!("Hello, World!") }"#)
+        .file(
+            ".cargo/config.toml",
+            r#"
+            [build]
+            ephemeral-intermediates = true
+            "#,
+        )
+        .build();
+
+    p.cargo("build")
+        .env("CARGO_BUILD_EPHEMERAL_INTERMEDIATES", "false")
+        .enable_mac_dsym()
+        .run();
+
+    assert!(p.root().join("target/debug/build").exists());
+}
+
+#[cargo_test]
 fn should_respect_env_var() {
     let p = project()
         .file("src/main.rs", r#"fn main() { println!("Hello, World!") }"#)

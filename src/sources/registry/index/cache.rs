@@ -258,6 +258,16 @@ impl<'gctx> CacheManager<'gctx> {
 
     /// Associates the value with the key.
     pub fn put(&self, key: &str, value: &[u8]) {
+        if !self
+            .gctx
+            .package_cache_lock_is_held(CacheLockMode::DownloadExclusive)
+        {
+            tracing::debug!(
+                key,
+                "skipping registry summary cache write under shared resolver lock"
+            );
+            return;
+        }
         let cache_path = &self.cache_path(key);
         if let Err(e) = self.put_inner(cache_path, value) {
             tracing::info!(?cache_path, "failed to write cache: {e}");
@@ -283,6 +293,16 @@ impl<'gctx> CacheManager<'gctx> {
 
     /// Invalidates the cache associated with the key.
     pub fn invalidate(&self, key: &str) {
+        if !self
+            .gctx
+            .package_cache_lock_is_held(CacheLockMode::DownloadExclusive)
+        {
+            tracing::debug!(
+                key,
+                "skipping registry summary cache invalidation under shared resolver lock"
+            );
+            return;
+        }
         let cache_path = &self.cache_path(key);
         if let Err(e) = fs::remove_file(cache_path) {
             if e.kind() != io::ErrorKind::NotFound {

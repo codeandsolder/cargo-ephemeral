@@ -24,7 +24,7 @@ use crate::resolver::features::ForceAllTargets;
 use crate::resolver::{HasDevUnits, Resolve};
 use crate::sources::source::{MaybePackage, SourceMap};
 use crate::util::HumanBytes;
-use crate::util::cache_lock::{CacheLock, CacheLockMode};
+use crate::util::cache_lock::CacheLockMode;
 use crate::util::errors::{CargoResult, HttpNotSuccessful};
 use crate::util::interning::InternedString;
 use crate::util::network::retry::{Retry, RetryResult};
@@ -336,8 +336,6 @@ pub struct Downloads<'a, 'gctx> {
     pending: Cell<u64>,
     /// Time when downloading started.
     start: Instant,
-    /// Global filesystem lock to ensure only one Cargo is downloading one at a time.
-    _lock: CacheLock<'gctx>,
 }
 
 impl<'a, 'gctx> Downloads<'a, 'gctx> {
@@ -350,6 +348,18 @@ impl<'a, 'gctx> Downloads<'a, 'gctx> {
             ProgressStyle::Ratio,
             set.gctx,
         ));
+        let shared_locked_offline = set
+            .gctx
+            .get_env_os("CARGO_SHARED_LOCKED_OFFLINE_RESOLUTION")
+            .is_some()
+            && !set.gctx.network_allowed()
+            && !set.gctx.lock_update_allowed();
+        let cache_lock_mode = if shared_locked_offline {
+            CacheLockMode::ResolveShared
+        } else {
+            CacheLockMode::DownloadExclusive
+        };
+        let package_lock = set.gctx.acquire_package_cache_lock(cache_lock_mode)?;
         let dl = Downloads {
             set,
             progress,
@@ -359,11 +369,27 @@ impl<'a, 'gctx> Downloads<'a, 'gctx> {
             downloaded_bytes: Cell::new(0),
             pending: Cell::new(0),
             start: Instant::now(),
-            _lock: set
-                .gctx
-                .acquire_package_cache_lock(CacheLockMode::DownloadExclusive)?,
         };
-        dl.run(ids).await
+        let packages = dl.run(ids).await?;
+
+        let mut deferred = set.gctx.deferred_global_last_use()?;
+        if shared_locked_offline {
+            // Package loading above is read-only in shared mode. Flush last-use
+            // bookkeeping under a short exclusive handoff while keeping GC out.
+            let gc_bridge = set.gctx.acquire_package_cache_lock(CacheLockMode::Shared)?;
+            drop(package_lock);
+            let usage_lock = set
+                .gctx
+                .acquire_package_cache_lock(CacheLockMode::DownloadExclusive)?;
+            drop(gc_bridge);
+            deferred.save_no_error(set.gctx);
+            drop(usage_lock);
+        } else {
+            deferred.save_no_error(set.gctx);
+            drop(package_lock);
+        }
+
+        Ok(packages)
     }
 
     async fn run(&self, ids: impl IntoIterator<Item = PackageId>) -> CargoResult<Vec<&'a Package>> {
@@ -388,10 +414,6 @@ impl<'a, 'gctx> Downloads<'a, 'gctx> {
             }
         }
         self.print_summary()?;
-        self.set
-            .gctx
-            .deferred_global_last_use()?
-            .save_no_error(self.set.gctx);
         Ok(out)
     }
 

@@ -35,7 +35,9 @@ pub(super) fn download(
     registry_config: RegistryConfig,
 ) -> CargoResult<MaybeLock> {
     let path = cache_path.join(&pkg.tarball_name());
-    let path = gctx.assert_package_cache_locked(CacheLockMode::DownloadExclusive, &path);
+    let shared_resolver_only = gctx.package_cache_lock_is_held(CacheLockMode::ResolveShared)
+        && !gctx.package_cache_lock_is_held(CacheLockMode::DownloadExclusive);
+    let path = gctx.assert_package_cache_locked(CacheLockMode::ResolveShared, &path);
 
     // Attempt to open a read-only copy first to avoid an exclusive write
     // lock and also work with read-only filesystems. Note that we check the
@@ -55,6 +57,13 @@ pub(super) fn download(
             );
             return Ok(MaybeLock::Ready(dst));
         }
+    }
+
+    if shared_resolver_only {
+        anyhow::bail!(
+            "cached crate `{}` is missing or empty during shared locked/offline package loading",
+            pkg
+        );
     }
 
     let url = crate_url(
@@ -138,7 +147,7 @@ pub(super) fn is_crate_downloaded(
     pkg: PackageId,
 ) -> bool {
     let path = cache_path.join(pkg.tarball_name());
-    let path = gctx.assert_package_cache_locked(CacheLockMode::DownloadExclusive, &path);
+    let path = gctx.assert_package_cache_locked(CacheLockMode::ResolveShared, &path);
     if let Ok(meta) = fs::metadata(path) {
         return meta.len() > 0;
     }

@@ -91,8 +91,10 @@ use super::FileLock;
 use crate::CargoResult;
 use crate::GlobalContext;
 use anyhow::Context as _;
-use std::io;
+use std::io::{self, Write as _};
+use std::panic::Location;
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 /// The style of lock to acquire.
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -108,6 +110,14 @@ pub enum CacheLockMode {
     /// If another cargo has a `Shared` lock, then both can operate
     /// concurrently.
     DownloadExclusive,
+    /// A `ResolveShared` lock allows multiple dependency resolvers to read
+    /// immutable package/index state concurrently.
+    ///
+    /// This acquires both cache locks shared, in the same mutate-then-package
+    /// order used by `MutateExclusive`. It is only appropriate when the
+    /// resolver cannot update indexes, download/unpack packages, mutate git
+    /// sources, or otherwise change global cache state.
+    ResolveShared,
     /// A `Shared` lock allows multiple cargos to read from the source files.
     ///
     /// You should use this when cargo is reading source files from the
@@ -365,7 +375,10 @@ impl CacheState {
         blocking: BlockingMode,
     ) -> CargoResult<LockingResult> {
         use CacheLockMode::*;
-        if mode == Shared && self.cache_lock.count > 0 && self.mutate_lock.count == 0 {
+        if matches!(mode, Shared | ResolveShared)
+            && self.cache_lock.count > 0
+            && self.mutate_lock.count == 0
+        {
             // Shared lock, when a DownloadExclusive is held.
             //
             // This isn't supported because it could cause a deadlock. If
@@ -377,6 +390,28 @@ impl CacheState {
             panic!("shared lock while holding download lock is not allowed");
         }
         match mode {
+            ResolveShared => {
+                // Follow the same global lock order as MutateExclusive:
+                // mutate first, package cache second. Multiple read-only
+                // resolvers can coexist while destructive GC remains excluded.
+                if self
+                    .mutate_lock
+                    .lock_shared(gctx, RESOLVE_SHARED_DESCR, blocking)
+                    == WouldBlock
+                {
+                    return Ok(WouldBlock);
+                }
+                if self
+                    .cache_lock
+                    .lock_shared(gctx, RESOLVE_SHARED_DESCR, blocking)
+                    == WouldBlock
+                {
+                    // Nonblocking acquisition is atomic: release the mutate
+                    // half if the package-cache half cannot be acquired.
+                    self.mutate_lock.decrement();
+                    return Ok(WouldBlock);
+                }
+            }
             Shared => {
                 if self.mutate_lock.lock_shared(gctx, SHARED_DESCR, blocking) == WouldBlock {
                     return Ok(WouldBlock);
@@ -423,6 +458,23 @@ impl CacheState {
     }
 }
 
+#[derive(Debug)]
+struct LockTrace {
+    mode: CacheLockMode,
+    caller: &'static Location<'static>,
+    wait: Duration,
+    acquired_at: Instant,
+    recursive: bool,
+}
+
+fn lock_trace_enabled(gctx: &GlobalContext) -> bool {
+    gctx.get_env_os("CARGO_PACKAGE_CACHE_LOCK_TRACE").is_some()
+}
+
+fn emit_lock_trace(args: std::fmt::Arguments<'_>) {
+    let _ = writeln!(io::stderr().lock(), "{args}");
+}
+
 /// A held lock guard.
 ///
 /// When this is dropped, the lock will be released.
@@ -430,17 +482,23 @@ impl CacheState {
 pub struct CacheLock<'lock> {
     mode: CacheLockMode,
     locker: &'lock CacheLocker,
+    trace: Option<LockTrace>,
 }
 
 impl Drop for CacheLock<'_> {
     fn drop(&mut self) {
         use CacheLockMode::*;
+        let held = self.trace.as_ref().map(|trace| trace.acquired_at.elapsed());
         let mut state = match self.locker.state.lock() {
             Ok(result) => result,
             // we should release the cache even if a thread panicked while holding a lock
             Err(poison) => poison.into_inner(),
         };
         match self.mode {
+            ResolveShared => {
+                state.cache_lock.decrement();
+                state.mutate_lock.decrement();
+            }
             Shared => {
                 state.mutate_lock.decrement();
             }
@@ -452,6 +510,21 @@ impl Drop for CacheLock<'_> {
                 state.mutate_lock.decrement();
             }
         }
+        drop(state);
+
+        if let (Some(trace), Some(held)) = (&self.trace, held) {
+            emit_lock_trace(format_args!(
+                "[cargo-package-lock] pid={} mode={:?} recursive={} wait_ms={:.3} held_ms={:.3} caller={}:{}:{}",
+                std::process::id(),
+                trace.mode,
+                trace.recursive,
+                trace.wait.as_secs_f64() * 1000.0,
+                held.as_secs_f64() * 1000.0,
+                trace.caller.file(),
+                trace.caller.line(),
+                trace.caller.column(),
+            ));
+        }
     }
 }
 
@@ -462,6 +535,7 @@ const CACHE_LOCK_NAME: &str = ".package-cache";
 const MUTATE_NAME: &str = ".package-cache-mutate";
 
 // Descriptions that are displayed in the "Blocking" message shown to the user.
+const RESOLVE_SHARED_DESCR: &str = "shared package resolution cache";
 const SHARED_DESCR: &str = "shared package cache";
 const DOWNLOAD_EXCLUSIVE_DESCR: &str = "package cache";
 const MUTATE_EXCLUSIVE_DESCR: &str = "package cache mutation";
@@ -493,23 +567,84 @@ impl CacheLocker {
 
     /// Acquires a lock with the given mode, possibly blocking if another
     /// cargo is holding the lock.
+    #[track_caller]
     pub fn lock(&self, gctx: &GlobalContext, mode: CacheLockMode) -> CargoResult<CacheLock<'_>> {
+        let tracing = lock_trace_enabled(gctx);
+        let started = tracing.then(Instant::now);
+        let caller = tracing.then(Location::caller);
         let mut state = self.state.lock().unwrap();
+        let recursive = match mode {
+            CacheLockMode::ResolveShared => {
+                state.mutate_lock.count > 0 || state.cache_lock.count > 0
+            }
+            CacheLockMode::Shared => state.mutate_lock.count > 0,
+            CacheLockMode::DownloadExclusive => state.cache_lock.count > 0,
+            CacheLockMode::MutateExclusive => {
+                state.mutate_lock.count > 0 || state.cache_lock.count > 0
+            }
+        };
         let _ = state.lock(gctx, mode, Blocking)?;
-        Ok(CacheLock { mode, locker: self })
+        let trace = started.zip(caller).map(|(started, caller)| LockTrace {
+            mode,
+            caller,
+            wait: started.elapsed(),
+            acquired_at: Instant::now(),
+            recursive,
+        });
+        Ok(CacheLock {
+            mode,
+            locker: self,
+            trace,
+        })
     }
 
     /// Acquires a lock with the given mode, returning `None` if another cargo
     /// is holding the lock.
+    #[track_caller]
     pub fn try_lock(
         &self,
         gctx: &GlobalContext,
         mode: CacheLockMode,
     ) -> CargoResult<Option<CacheLock<'_>>> {
+        let tracing = lock_trace_enabled(gctx);
+        let started = tracing.then(Instant::now);
+        let caller = tracing.then(Location::caller);
         let mut state = self.state.lock().unwrap();
+        let recursive = match mode {
+            CacheLockMode::ResolveShared => {
+                state.mutate_lock.count > 0 || state.cache_lock.count > 0
+            }
+            CacheLockMode::Shared => state.mutate_lock.count > 0,
+            CacheLockMode::DownloadExclusive => state.cache_lock.count > 0,
+            CacheLockMode::MutateExclusive => {
+                state.mutate_lock.count > 0 || state.cache_lock.count > 0
+            }
+        };
         if state.lock(gctx, mode, NonBlocking)? == LockAcquired {
-            Ok(Some(CacheLock { mode, locker: self }))
+            let trace = started.zip(caller).map(|(started, caller)| LockTrace {
+                mode,
+                caller,
+                wait: started.elapsed(),
+                acquired_at: Instant::now(),
+                recursive,
+            });
+            Ok(Some(CacheLock {
+                mode,
+                locker: self,
+                trace,
+            }))
         } else {
+            if let (Some(started), Some(caller)) = (started, caller) {
+                emit_lock_trace(format_args!(
+                    "[cargo-package-lock] pid={} mode={:?} result=would-block wait_ms={:.3} caller={}:{}:{}",
+                    std::process::id(),
+                    mode,
+                    started.elapsed().as_secs_f64() * 1000.0,
+                    caller.file(),
+                    caller.line(),
+                    caller.column(),
+                ));
+            }
             Ok(None)
         }
     }
@@ -531,9 +666,15 @@ impl CacheLocker {
             state.mutate_lock.count,
             state.mutate_lock.is_exclusive,
         ) {
+            // Any package-cache holder is strong enough for read-only
+            // resolver assertions. ResolveShared itself holds mutate+cache
+            // shared, while DownloadExclusive/MutateExclusive are stronger.
+            (CacheLockMode::ResolveShared, 1.., _, _) => true,
             (CacheLockMode::Shared, _, 1.., _) => true,
-            (CacheLockMode::MutateExclusive, _, 1.., true) => true,
-            (CacheLockMode::DownloadExclusive, 1.., _, _) => true,
+            (CacheLockMode::MutateExclusive, 1.., 1.., true) if state.cache_lock.is_exclusive => {
+                true
+            }
+            (CacheLockMode::DownloadExclusive, 1.., _, _) if state.cache_lock.is_exclusive => true,
             _ => false,
         }
     }
