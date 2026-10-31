@@ -333,7 +333,6 @@ fn ephemeral_intermediates_reap_abandoned_but_not_live_roots() {
     use std::fs::OpenOptions;
 
     const PREFIX: &str = "cargo-ephemeral-build-";
-    const LEASE: &str = ".cargo-owner.lock";
     const READY: &str = ".cargo-owner.ready";
 
     let p = project()
@@ -345,38 +344,16 @@ fn ephemeral_intermediates_reap_abandoned_but_not_live_roots() {
     let unpublished = temp.join(format!("{PREFIX}unpublished"));
     unpublished.mkdir_p();
     std::fs::write(unpublished.join("junk"), b"not-yet-published").unwrap();
-    let unpublished_lease = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create_new(true)
-        .open(unpublished.join(LEASE))
-        .unwrap();
-    unpublished_lease.lock().unwrap();
-    drop(unpublished_lease);
-
     let abandoned = temp.join(format!("{PREFIX}abandoned"));
     abandoned.mkdir_p();
     std::fs::write(abandoned.join("junk"), b"stale").unwrap();
-    let abandoned_lease = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create_new(true)
-        .open(abandoned.join(LEASE))
-        .unwrap();
-    abandoned_lease.lock().unwrap();
     std::fs::write(abandoned.join(READY), b"").unwrap();
-    drop(abandoned_lease);
 
     let live = temp.join(format!("{PREFIX}live"));
     live.mkdir_p();
     std::fs::write(live.join("junk"), b"live").unwrap();
-    let live_lease = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create_new(true)
-        .open(live.join(LEASE))
-        .unwrap();
-    live_lease.lock().unwrap();
+    let live_lock = OpenOptions::new().read(true).open(&live).unwrap();
+    live_lock.lock().unwrap();
     std::fs::write(live.join(READY), b"").unwrap();
 
     p.cargo("build")
@@ -396,7 +373,7 @@ fn ephemeral_intermediates_reap_abandoned_but_not_live_roots() {
     );
 
     std::fs::remove_dir_all(&unpublished).unwrap();
-    drop(live_lease);
+    drop(live_lock);
     p.cargo("build")
         .env("CARGO_BUILD_EPHEMERAL_INTERMEDIATES", "true")
         .env("TMPDIR", &temp)
@@ -414,7 +391,7 @@ fn ephemeral_intermediates_reap_abandoned_but_not_live_roots() {
 
 #[cargo_test]
 #[cfg(target_os = "linux")]
-fn ephemeral_intermediates_lease_is_inherited_by_build_scripts() {
+fn ephemeral_intermediates_root_lock_is_inherited_by_build_scripts() {
     let p = project()
         .file(
             "build.rs",
@@ -424,8 +401,8 @@ fn main() {
         .unwrap()
         .filter_map(Result::ok)
         .filter_map(|entry| std::fs::read_link(entry.path()).ok())
-        .any(|path| path.to_string_lossy().contains(".cargo-owner.lock"));
-    println!("cargo:warning=ephemeral-lease-inherited={inherited}");
+        .any(|path| path.to_string_lossy().contains("cargo-ephemeral-build-"));
+    println!("cargo:warning=ephemeral-root-lock-inherited={inherited}");
 }
 "#,
         )
@@ -434,7 +411,7 @@ fn main() {
 
     p.cargo("build")
         .env("CARGO_BUILD_EPHEMERAL_INTERMEDIATES", "true")
-        .with_stderr_contains("[WARNING] foo@0.0.1: ephemeral-lease-inherited=true")
+        .with_stderr_contains("[WARNING] foo@0.0.1: ephemeral-root-lock-inherited=true")
         .run();
 }
 

@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+command -v flock >/dev/null
+command -v systemd-tmpfiles >/dev/null
+
+version="$(systemd-tmpfiles --version | awk 'NR == 1 { print $2 }')"
+if [[ -z "$version" || "$version" -lt 262 ]]; then
+    echo "skipping tmpfiles R-age lock regression: systemd >=262 required"
+    exit 0
+fi
+
+base="${TMPDIR:-/tmp}/cargo-ephemeral-tmpfiles-lock-test-$$"
+child_root="${base}-child-lock"
+root_locked="${base}-root-lock"
+config="${base}.conf"
+
+cleanup() {
+    rm -rf -- "$child_root" "$root_locked" "$config"
+}
+trap cleanup EXIT
+
+mkdir "$child_root" "$root_locked"
+: >"$child_root/.cargo-owner.lock"
+: >"$child_root/payload"
+: >"$root_locked/payload"
+printf 'R %s-* - - - mM:0 -
+' "$base" >"$config"
+
+# Negative control for the old design: a child-file lock does not protect the
+# rest of the live tree from age-based recursive cleaning.
+exec {child_fd}<>"$child_root/.cargo-owner.lock"
+flock -x "$child_fd"
+# The fixed design locks the exact directory matched by the R rule.
+exec {root_fd}<"$root_locked"
+flock -x "$root_fd"
+
+systemd-tmpfiles --clean "$config"
+
+test -e "$child_root/.cargo-owner.lock"
+test ! -e "$child_root/payload"
+test -d "$root_locked"
+test -e "$root_locked/payload"
+
+flock -u "$child_fd"
+exec {child_fd}>&-
+flock -u "$root_fd"
+exec {root_fd}<&-
+
+# The root becomes eligible as soon as the process releases the lock.
+systemd-tmpfiles --clean "$config"
+test ! -e "$root_locked"

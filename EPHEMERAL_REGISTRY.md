@@ -78,11 +78,12 @@ Cleanup is layered rather than relying on a single best-effort destructor:
 
 - ordinary success and error paths drop the Rust `tempfile::TempDir` and remove
   the intermediate tree immediately;
-- on Linux every temporary root must acquire a kernel-backed exclusive lease;
-  the lease FD is inherited across exec, so compiler wrappers/build scripts keep
-  the root owned even if the Cargo parent dies and host tmpfiles cleanup stays
-  away from live descendants. On Linux/glibc, the next ephemeral Cargo invocation
-  also reaps same-user abandoned roots after the process tree releases the lease,
+- on Linux every temporary root must acquire a kernel-backed exclusive `flock`
+  on the build-root directory itself. That directory FD is inherited across exec,
+  so compiler wrappers/build scripts keep the root owned even if the Cargo parent
+  dies, and systemd-tmpfiles observes the lock on the exact path it would delete.
+  On Linux/glibc, the next ephemeral Cargo invocation also reaps same-user abandoned
+  roots after the process tree releases the lock,
   but only when the temporary filesystem is positively identified as non-NFS.
   NFS roots, filesystem-type probe failures, and unsupported platforms do not opt
   into Cargo's self-reaping path;
@@ -90,7 +91,7 @@ Cleanup is layered rather than relying on a single best-effort destructor:
   about by Cargo and remain subject to the host operating system's temporary-file
   cleanup policy.
 
-The lease is published only after it is already locked, so concurrent Cargo
+The root is published only after it is already locked, so concurrent Cargo
 processes cannot mistake a newly-created or live build root for an abandoned one.
 This also covers `SIGKILL`/abort-style termination on the next Cargo invocation,
 which signal-handler-only tempfile schemes cannot guarantee.

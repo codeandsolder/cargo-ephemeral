@@ -175,6 +175,7 @@ jobs:
               ci/clean-test-output.sh|\
               ci/fetch-smoke-test.sh|\
               ci/test-cargo-ephemeral-wrapper|\
+              ci/test-cargo-ephemeral-tmpfiles-lock|\
               src/bin/cargo/main.rs|\
               src/context/mod.rs|\
               src/context/schema.rs|\
@@ -213,6 +214,9 @@ jobs:
 
       - name: Wrapper concurrency smoke
         run: ci/test-cargo-ephemeral-wrapper
+
+      - name: Tmpfiles root-lock smoke
+        run: ci/test-cargo-ephemeral-tmpfiles-lock
 
       - name: Focused regression test
         run: |
