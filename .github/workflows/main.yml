@@ -135,8 +135,6 @@ jobs:
       CARGO_INCREMENTAL: 0
       CARGO_PUBLIC_NETWORK_TESTS: 1
       CARGO_TEST_REQUIRE_EXTERNAL_TOOLS: 1
-      # Workaround for https://github.com/rust-lang/rustup/issues/3036
-      RUSTUP_WINDOWS_PATH_ADD_BIN: 0
     strategy:
       matrix:
         include: ${{ fromJSON(startsWith(github.ref, 'refs/tags/') && '[{"name":"Linux x86_64 stable","os":"ubuntu-latest","rust":"stable","other":"i686-unknown-linux-gnu"},{"name":"Linux x86_64 beta","os":"ubuntu-latest","rust":"beta","other":"i686-unknown-linux-gnu"},{"name":"Linux x86_64 nightly","os":"ubuntu-latest","rust":"nightly","other":"i686-unknown-linux-gnu"},{"name":"Linux aarch64 stable","os":"ubuntu-24.04-arm","rust":"stable","other":"TODO"},{"name":"Linux aarch64 nightly","os":"ubuntu-24.04-arm","rust":"nightly","other":"TODO"},{"name":"macOS aarch64 stable","os":"macos-15","rust":"stable","other":"x86_64-apple-darwin"},{"name":"macOS aarch64 nightly","os":"macos-15","rust":"nightly","other":"x86_64-apple-darwin"},{"name":"Windows x86_64 MSVC stable","os":"windows-latest","rust":"stable-msvc","target_env":"msvc","other":"i686-pc-windows-msvc"},{"name":"Windows x86_64 MSVC nightly","os":"windows-latest","rust":"nightly-msvc","target_env":"msvc","other":"i686-pc-windows-msvc"},{"name":"Windows aarch64 MSVC stable","os":"windows-11-arm","rust":"stable-msvc","target_env":"msvc","other":"i686-pc-windows-msvc"},{"name":"Windows aarch64 MSVC nightly","os":"windows-11-arm","rust":"nightly-msvc","target_env":"msvc","other":"i686-pc-windows-msvc"},{"name":"Windows x86_64 gnu nightly","os":"windows-latest","rust":"nightly-gnu","target_env":"gnu","other":"i686-pc-windows-gnu"}]' || '[{"name":"Linux x86_64 Rust 1.99","os":"ubuntu-latest","rust":"1.99.0","other":"i686-unknown-linux-gnu"}]') }}

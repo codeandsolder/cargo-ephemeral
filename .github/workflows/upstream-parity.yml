@@ -17,6 +17,7 @@ concurrency:
 
 env:
   PARITY_ISSUE_TITLE: "Automated upstream parity failure"
+  WORKFLOW_DRIFT_ISSUE_TITLE: "Upstream workflow changes require manual reconciliation"
   GH_TOKEN: ${{ github.token }}
 
 jobs:
@@ -47,14 +48,100 @@ jobs:
           echo "OLD_HEAD=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
           echo "UPSTREAM_HEAD=$(git rev-parse upstream/master)" >> "$GITHUB_ENV"
 
+      - name: Detect upstream workflow drift
+        run: |
+          drift="$RUNNER_TEMP/upstream-workflow-drift.txt"
+          : > "$drift"
+          set +e
+          merge_output=$(git merge-tree --write-tree --messages "$OLD_HEAD" upstream/master 2>&1)
+          merge_rc=$?
+          set -e
+
+          if [ "$merge_rc" -eq 0 ]; then
+            preview_tree=$(printf '%s\n' "$merge_output" | head -n1)
+            if ! git diff --quiet "$OLD_HEAD" "$preview_tree" -- .github/workflows; then
+              git diff --name-status "$OLD_HEAD" "$preview_tree" -- .github/workflows > "$drift"
+            fi
+          else
+            fork_base=$(git merge-base "$OLD_HEAD" upstream/master)
+            if ! git diff --quiet "$fork_base"..upstream/master -- .github/workflows; then
+              {
+                echo "three-way merge preview conflicted; upstream workflow delta since fork base:"
+                git diff --name-status "$fork_base"..upstream/master -- .github/workflows
+              } > "$drift"
+            fi
+          fi
+
+          if [ -s "$drift" ]; then
+            echo "WORKFLOW_DRIFT=1" >> "$GITHUB_ENV"
+          else
+            echo "WORKFLOW_DRIFT=0" >> "$GITHUB_ENV"
+          fi
+
+      - name: Reconcile workflow drift issue
+        if: github.ref == 'refs/heads/master'
+        run: |
+          drift="$RUNNER_TEMP/upstream-workflow-drift.txt"
+          issue=$(gh api "repos/$GITHUB_REPOSITORY/issues?state=open&per_page=100" |
+            jq -r --arg title "$WORKFLOW_DRIFT_ISSUE_TITLE" '.[] | select(.pull_request | not) | select(.title == $title) | .number' |
+            head -n1)
+
+          if [ "$WORKFLOW_DRIFT" = 1 ]; then
+            {
+              echo "Upstream changed GitHub workflow files that the parity bot intentionally does not rewrite."
+              echo
+              echo "The bot token cannot safely promote commits that modify \`.github/workflows/**\`; those files are therefore kept byte-for-byte from the current fork and require a normal reviewed PR when upstream changes them."
+              echo
+              echo "- Upstream: $UPSTREAM_HEAD"
+              echo "- Fork before run: $OLD_HEAD"
+              echo "- Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+              echo
+              echo '```text'
+              cat "$drift"
+              echo '```'
+            } > /tmp/workflow-drift-issue.md
+
+            if [ -n "$issue" ]; then
+              jq -n --rawfile body /tmp/workflow-drift-issue.md '{body:$body}' |
+                gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/$issue" --input - >/dev/null
+            else
+              jq -n --arg title "$WORKFLOW_DRIFT_ISSUE_TITLE" --rawfile body /tmp/workflow-drift-issue.md '{title:$title,body:$body}' |
+                gh api --method POST "repos/$GITHUB_REPOSITORY/issues" --input - >/dev/null
+            fi
+          elif [ -n "$issue" ]; then
+            jq -n --arg body "Workflow drift is fully reconciled at upstream $UPSTREAM_HEAD in run $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID." '{body:$body,state:"closed"}' |
+              gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/$issue" --input - >/dev/null
+          fi
+
       - name: Squash and rebase carried patch
         run: |
           fork_base=$(git merge-base HEAD upstream/master)
           if [ "$fork_base" != "$(git rev-parse HEAD)" ]; then
             git reset --soft "$fork_base"
-            git commit -m "chore: carry cargo-ephemeral downstream patch"
+            # Workflow files are fork-owned for automated promotion. Exclude
+            # them from the carried patch so upstream workflow edits cannot
+            # conflict during rebase or require unavailable workflow-write
+            # permission when the bot pushes the result.
+            git restore --source="$fork_base" --staged --worktree .github/workflows
+            if git diff --cached --quiet; then
+              git reset --hard "$fork_base"
+            else
+              git commit -m "chore: carry cargo-ephemeral downstream patch"
+            fi
           fi
           git rebase upstream/master
+
+          # Reattach the exact reviewed workflow tree from the fork. `git
+          # restore` also removes any workflow added only by upstream, keeping
+          # promotion workflow-neutral from GitHub's permission perspective.
+          git restore --source="$OLD_HEAD" --staged --worktree .github/workflows
+          if ! git diff --cached --quiet; then
+            if [ "$(git rev-list --count upstream/master..HEAD)" -eq 0 ]; then
+              git commit -m "chore: carry cargo-ephemeral downstream workflows"
+            else
+              git commit --amend --no-edit
+            fi
+          fi
 
       - name: Install Rust
         run: |
