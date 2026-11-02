@@ -411,11 +411,23 @@ pub fn resolve_with_previous<'gctx>(
     specs: &[PackageIdSpec],
     register_patches: bool,
 ) -> CargoResult<Resolve> {
-    // We only want one Cargo at a time resolving a crate graph since this can
-    // involve a lot of frobbing of the global caches.
-    let _lock = ws
+    // Upstream serializes the entire dependency resolver because resolution
+    // may lazily mutate registry/git caches. A locked + offline resolve with an
+    // existing graph can opt into a read-only shared mode; lower-level write
+    // paths still require DownloadExclusive and will reject a missed mutation.
+    let shared_locked_offline = ws
         .gctx()
-        .acquire_package_cache_lock(CacheLockMode::DownloadExclusive)?;
+        .get_env_os("CARGO_SHARED_LOCKED_OFFLINE_RESOLUTION")
+        .is_some()
+        && previous.is_some()
+        && !ws.gctx().network_allowed()
+        && !ws.gctx().lock_update_allowed();
+    let cache_lock_mode = if shared_locked_offline {
+        CacheLockMode::ResolveShared
+    } else {
+        CacheLockMode::DownloadExclusive
+    };
+    let resolver_lock = ws.gctx().acquire_package_cache_lock(cache_lock_mode)?;
 
     // Some packages are already loaded when setting up a workspace. This
     // makes it so anything that was already loaded will not be loaded again.
@@ -528,7 +540,21 @@ pub fn resolve_with_previous<'gctx>(
     }
     let gctx = ws.gctx();
     let mut deferred = gctx.deferred_global_last_use()?;
-    deferred.save_no_error(gctx);
+    if shared_locked_offline {
+        // Last-use tracking flushes SQLite state. Bridge the read-only resolver
+        // lock to DownloadExclusive without ever exposing a window to
+        // MutateExclusive GC: keep mutate shared, release package shared,
+        // acquire package exclusive, then release the mutate bridge.
+        let gc_bridge = gctx.acquire_package_cache_lock(CacheLockMode::Shared)?;
+        drop(resolver_lock);
+        let usage_lock = gctx.acquire_package_cache_lock(CacheLockMode::DownloadExclusive)?;
+        drop(gc_bridge);
+        deferred.save_no_error(gctx);
+        drop(usage_lock);
+    } else {
+        deferred.save_no_error(gctx);
+        drop(resolver_lock);
+    }
     Ok(resolved)
 }
 

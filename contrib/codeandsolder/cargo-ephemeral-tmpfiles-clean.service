@@ -1,0 +1,6 @@
+[Unit]
+Description=Clean stale cargo-ephemeral intermediate build roots
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemd-tmpfiles --clean /etc/tmpfiles.d/cargo-ephemeral.conf

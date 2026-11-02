@@ -4,5 +4,6 @@
 set -euo pipefail
 
 df -h
-rm -rf target/tmp
+target_dir="${CARGO_TARGET_DIR:-target}"
+rm -rf "$target_dir/tmp"
 df -h

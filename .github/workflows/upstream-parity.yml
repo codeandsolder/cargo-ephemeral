@@ -1,0 +1,294 @@
+name: Upstream parity
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+  schedule:
+    - cron: "17 2 * * *"
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: upstream-parity
+  cancel-in-progress: true
+
+env:
+  PARITY_ISSUE_TITLE: "Automated upstream parity failure"
+  WORKFLOW_DRIFT_ISSUE_TITLE: "Upstream workflow changes require manual reconciliation"
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  rebase-test-promote:
+    # A scheduled rebase pushes the rewritten patch stack with GITHUB_TOKEN.
+    # Do not immediately build the exact same result a second time.
+    if: github.event_name != 'push' || github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          # Keep enough history to reach the upstream base without fetching tags or
+          # every historical Cargo release branch. Downstream scope is enforced by
+          # the explicit path allowlist below, not by a fragile commit-count cap.
+          fetch-depth: 64
+          fetch-tags: false
+
+      - name: Configure Git
+        run: |
+          git config user.name "cargo-ephemeral parity bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/rust-lang/cargo.git
+          git fetch --no-tags --depth=512 upstream master
+          echo "OLD_HEAD=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          echo "UPSTREAM_HEAD=$(git rev-parse upstream/master)" >> "$GITHUB_ENV"
+
+      - name: Detect upstream workflow drift
+        run: |
+          drift="$RUNNER_TEMP/upstream-workflow-drift.txt"
+          : > "$drift"
+          set +e
+          merge_output=$(git merge-tree --write-tree --messages "$OLD_HEAD" upstream/master 2>&1)
+          merge_rc=$?
+          set -e
+
+          if [ "$merge_rc" -eq 0 ]; then
+            preview_tree=$(printf '%s\n' "$merge_output" | head -n1)
+            if ! git diff --quiet "$OLD_HEAD" "$preview_tree" -- .github/workflows; then
+              git diff --name-status "$OLD_HEAD" "$preview_tree" -- .github/workflows > "$drift"
+            fi
+          else
+            fork_base=$(git merge-base "$OLD_HEAD" upstream/master)
+            if ! git diff --quiet "$fork_base"..upstream/master -- .github/workflows; then
+              {
+                echo "three-way merge preview conflicted; upstream workflow delta since fork base:"
+                git diff --name-status "$fork_base"..upstream/master -- .github/workflows
+              } > "$drift"
+            fi
+          fi
+
+          if [ -s "$drift" ]; then
+            echo "WORKFLOW_DRIFT=1" >> "$GITHUB_ENV"
+          else
+            echo "WORKFLOW_DRIFT=0" >> "$GITHUB_ENV"
+          fi
+
+      - name: Reconcile workflow drift issue
+        if: github.ref == 'refs/heads/master'
+        run: |
+          drift="$RUNNER_TEMP/upstream-workflow-drift.txt"
+          issue=$(gh api "repos/$GITHUB_REPOSITORY/issues?state=open&per_page=100" |
+            jq -r --arg title "$WORKFLOW_DRIFT_ISSUE_TITLE" '.[] | select(.pull_request | not) | select(.title == $title) | .number' |
+            head -n1)
+
+          if [ "$WORKFLOW_DRIFT" = 1 ]; then
+            {
+              echo "Upstream changed GitHub workflow files that the parity bot intentionally does not rewrite."
+              echo
+              echo "The bot token cannot safely promote commits that modify \`.github/workflows/**\`; those files are therefore kept byte-for-byte from the current fork and require a normal reviewed PR when upstream changes them."
+              echo
+              echo "- Upstream: $UPSTREAM_HEAD"
+              echo "- Fork before run: $OLD_HEAD"
+              echo "- Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+              echo
+              echo '```text'
+              cat "$drift"
+              echo '```'
+            } > /tmp/workflow-drift-issue.md
+
+            if [ -n "$issue" ]; then
+              jq -n --rawfile body /tmp/workflow-drift-issue.md '{body:$body}' |
+                gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/$issue" --input - >/dev/null
+            else
+              jq -n --arg title "$WORKFLOW_DRIFT_ISSUE_TITLE" --rawfile body /tmp/workflow-drift-issue.md '{title:$title,body:$body}' |
+                gh api --method POST "repos/$GITHUB_REPOSITORY/issues" --input - >/dev/null
+            fi
+          elif [ -n "$issue" ]; then
+            jq -n --arg body "Workflow drift is fully reconciled at upstream $UPSTREAM_HEAD in run $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID." '{body:$body,state:"closed"}' |
+              gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/$issue" --input - >/dev/null
+          fi
+
+      - name: Squash and rebase carried patch
+        run: |
+          fork_base=$(git merge-base HEAD upstream/master)
+          if [ "$fork_base" != "$(git rev-parse HEAD)" ]; then
+            git reset --soft "$fork_base"
+            # Workflow files are fork-owned for automated promotion. Exclude
+            # them from the carried patch so upstream workflow edits cannot
+            # conflict during rebase or require unavailable workflow-write
+            # permission when the bot pushes the result.
+            git restore --source="$fork_base" --staged --worktree .github/workflows
+            if git diff --cached --quiet; then
+              git reset --hard "$fork_base"
+            else
+              git commit -m "chore: carry cargo-ephemeral downstream patch"
+            fi
+          fi
+          git rebase upstream/master
+
+          # Reattach the exact reviewed workflow tree from the fork. `git
+          # restore` also removes any workflow added only by upstream, keeping
+          # promotion workflow-neutral from GitHub's permission perspective.
+          git restore --source="$OLD_HEAD" --staged --worktree .github/workflows
+          if ! git diff --cached --quiet; then
+            if [ "$(git rev-list --count upstream/master..HEAD)" -eq 0 ]; then
+              git commit -m "chore: carry cargo-ephemeral downstream workflows"
+            else
+              git commit --amend --no-edit
+            fi
+          fi
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install 1.99.0 --profile minimal --component rustfmt
+          rustup default 1.99.0
+
+      - name: Diff sanity
+        run: |
+          git diff --check upstream/master...HEAD
+          commits=$(git rev-list --count upstream/master..HEAD)
+          files=$(git diff --name-only upstream/master...HEAD | wc -l)
+          echo "carried commits: $commits"
+          echo "changed files: $files"
+
+          unexpected=0
+          while IFS= read -r file; do
+            case "$file" in
+              .github/workflows/audit.yml|\
+              .github/workflows/compatibility.yml|\
+              .github/workflows/contrib.yml|\
+              .github/workflows/main.yml|\
+              .github/workflows/publish-ci-client.yml|\
+              .github/workflows/sccache-l0-merge.yml|\
+              .github/workflows/shared-sccache.yml|\
+              .github/workflows/upstream-parity.yml|\
+              EPHEMERAL_REGISTRY.md|\
+              contrib/codeandsolder/cargo-ephemeral-tmpfiles-clean.service|\
+              contrib/codeandsolder/cargo-ephemeral-tmpfiles-clean.timer|\
+              contrib/codeandsolder/cargo-ephemeral-tmpfiles.conf|\
+              ci/cargo-ephemeral-wrapper|\
+              ci/clean-test-output.sh|\
+              ci/fetch-smoke-test.sh|\
+              ci/test-cargo-ephemeral-wrapper|\
+              ci/test-cargo-ephemeral-tmpfiles-lock|\
+              src/bin/cargo/main.rs|\
+              src/context/mod.rs|\
+              src/context/schema.rs|\
+              src/ops/resolve.rs|\
+              src/sources/git/source.rs|\
+              src/sources/git/utils.rs|\
+              src/sources/registry/download.rs|\
+              src/sources/registry/git_remote.rs|\
+              src/sources/registry/http_remote.rs|\
+              src/sources/registry/index/cache.rs|\
+              src/sources/registry/mod.rs|\
+              src/util/cache_lock.rs|\
+              src/util/diagnostic_server.rs|\
+              src/util/flock.rs|\
+              src/util/lockserver.rs|\
+              src/workspace/package.rs|\
+              tests/testsuite/cache_lock.rs|\
+              tests/testsuite/cargo_command.rs|\
+              tests/testsuite/build_dir.rs|\
+              tests/testsuite/cargo_add/mod.rs|\
+              tests/testsuite/cargo_add/target_triple/*|\
+              tests/testsuite/cargo_remove/mod.rs|\
+              tests/testsuite/cargo_remove/target_triple/*|\
+              tests/testsuite/registry.rs)
+                ;;
+              *)
+                echo "unexpected downstream path: $file" >&2
+                unexpected=1
+                ;;
+            esac
+          done < <(git diff --name-only upstream/master...HEAD)
+          test "$unexpected" -eq 0
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Wrapper concurrency smoke
+        run: ci/test-cargo-ephemeral-wrapper
+
+      - name: Tmpfiles root-lock smoke
+        run: ci/test-cargo-ephemeral-tmpfiles-lock
+
+      - name: Focused regression test
+        run: |
+          export CARGO_TEST_DISABLE_NIGHTLY=1
+          cargo test --test testsuite cache_lock::
+          cargo test --test testsuite shared_locked_offline_sparse_resolve_uses_shared_lock
+          cargo test --test testsuite shared_locked_offline_git_
+          cargo test --test testsuite registry_source_can_be_ephemeral
+          cargo test --test testsuite target_triple::case
+
+      - name: Workspace check
+        run: cargo check --workspace --all-targets
+
+      - name: Build release binary
+        run: |
+          cargo build --release --locked --bin cargo
+          echo "CANDIDATE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          {
+            echo "fork_sha=$(git rev-parse HEAD)"
+            echo "upstream_sha=$(git rev-parse upstream/master)"
+          } > cargo-ephemeral-build.txt
+
+      - name: Upload release binary
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: cargo-ephemeral-linux-x86_64
+          path: |
+            target/release/cargo
+            cargo-ephemeral-build.txt
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Promote rebased branch
+        if: github.ref == 'refs/heads/master'
+        run: |
+          new_head=$(git rev-parse HEAD)
+          if [ "$new_head" != "$OLD_HEAD" ]; then
+            git push --force-with-lease=master:"$OLD_HEAD" origin HEAD:master
+          fi
+
+      - name: Close recovered parity issue
+        if: success() && github.ref == 'refs/heads/master'
+        run: |
+          issue=$(gh api "repos/$GITHUB_REPOSITORY/issues?state=open&per_page=100" |
+            jq -r --arg title "$PARITY_ISSUE_TITLE" '.[] | select(.pull_request | not) | select(.title == $title) | .number' |
+            head -n1)
+          if [ -n "$issue" ]; then
+            jq -n --arg body "Parity recovered at upstream $UPSTREAM_HEAD in run $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID." '{body:$body}' |
+              gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$issue/comments" --input -
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/$issue" -f state=closed >/dev/null
+          fi
+
+      - name: Report parity failure
+        if: failure() && github.ref == 'refs/heads/master'
+        run: |
+          git rebase --abort >/dev/null 2>&1 || true
+          {
+            echo "Daily upstream parity failed."
+            echo
+            echo "- Upstream: ${UPSTREAM_HEAD:-unknown}"
+            echo "- Fork before run: ${OLD_HEAD:-unknown}"
+            echo "- Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo
+            echo "An agent should preserve the downstream ephemeral Cargo semantics and CI policy documented in EPHEMERAL_REGISTRY.md; upstream wins everywhere else."
+          } > /tmp/parity-issue.md
+          issue=$(gh api "repos/$GITHUB_REPOSITORY/issues?state=open&per_page=100" |
+            jq -r --arg title "$PARITY_ISSUE_TITLE" '.[] | select(.pull_request | not) | select(.title == $title) | .number' |
+            head -n1)
+          if [ -n "$issue" ]; then
+            jq -n --rawfile body /tmp/parity-issue.md '{body:$body}' |
+              gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$issue/comments" --input -
+          else
+            jq -n --arg title "$PARITY_ISSUE_TITLE" --rawfile body /tmp/parity-issue.md '{title:$title,body:$body}' |
+              gh api --method POST "repos/$GITHUB_REPOSITORY/issues" --input -
+          fi

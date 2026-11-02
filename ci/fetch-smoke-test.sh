@@ -23,5 +23,5 @@ fi
 
 cargo build --features "$FEATURES"
 export CARGO_HOME=$RUNNER_TEMP/chome
-target/debug/cargo fetch
+"${CARGO_TARGET_DIR:-target}/debug/cargo" fetch
 rm -rf $CARGO_HOME

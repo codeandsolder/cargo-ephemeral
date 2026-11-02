@@ -53,9 +53,9 @@ fn main() {
         cli::main(&mut gctx)
     };
 
-    match result {
-        Err(e) => cargo::exit_with_error(e, &mut *gctx.shell()),
-        Ok(()) => {}
+    if let Err(e) = result {
+        gctx.cleanup_ephemeral_build_root();
+        cargo::exit_with_error(e, &mut *gctx.shell());
     }
 }
 

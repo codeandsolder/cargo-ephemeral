@@ -21,7 +21,6 @@ use cargo_util::paths;
 
 pub(crate) use self::imp::lock_exclusive;
 pub(crate) use self::imp::lock_shared;
-#[expect(unused_imports, reason = "for non-blocking lock callers")]
 pub(crate) use self::imp::try_lock_exclusive;
 #[expect(unused_imports, reason = "for non-blocking lock callers")]
 pub(crate) use self::imp::try_lock_shared;
@@ -443,21 +442,32 @@ fn acquire(
 }
 
 #[cfg(all(target_os = "linux", not(target_env = "musl")))]
-pub fn is_on_nfs_mount(path: &Path) -> bool {
+pub(crate) fn is_on_nfs_mount_checked(path: &Path) -> io::Result<bool> {
     use std::ffi::CString;
     use std::mem;
     use std::os::unix::prelude::*;
 
-    let Ok(path) = CString::new(path.as_os_str().as_bytes()) else {
-        return false;
-    };
+    let path = CString::new(path.as_os_str().as_bytes()).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "filesystem path contains an interior NUL byte",
+        )
+    })?;
 
+    // SAFETY: `path` is a valid NUL-terminated C string and `buf` points to
+    // writable storage for the duration of the call.
     unsafe {
         let mut buf: libc::statfs = mem::zeroed();
-        let r = libc::statfs(path.as_ptr(), &mut buf);
-
-        r == 0 && buf.f_type as u32 == libc::NFS_SUPER_MAGIC as u32
+        if libc::statfs(path.as_ptr(), &mut buf) != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(buf.f_type as u32 == libc::NFS_SUPER_MAGIC as u32)
     }
+}
+
+#[cfg(all(target_os = "linux", not(target_env = "musl")))]
+pub fn is_on_nfs_mount(path: &Path) -> bool {
+    is_on_nfs_mount_checked(path).unwrap_or(false)
 }
 
 #[cfg(any(not(target_os = "linux"), target_env = "musl"))]

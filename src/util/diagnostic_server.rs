@@ -285,7 +285,7 @@ impl RustfixDiagnosticServer {
 
     fn run(self, on_message: &dyn Fn(Message), done: &AtomicBool) {
         while let Ok((client, _)) = self.listener.accept() {
-            if done.load(Ordering::SeqCst) {
+            if done.load(Ordering::Relaxed) {
                 break;
             }
             let mut client = BufReader::new(client);
@@ -308,7 +308,7 @@ impl RustfixDiagnosticServer {
 
 impl Drop for StartedServer {
     fn drop(&mut self) {
-        self.done.store(true, Ordering::SeqCst);
+        self.done.store(true, Ordering::Relaxed);
         // Ignore errors here as this is largely best-effort
         if TcpStream::connect(&self.addr).is_err() {
             return;
