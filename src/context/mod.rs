@@ -413,20 +413,57 @@ impl EphemeralBuildRoot {
 
 impl Drop for EphemeralBuildRoot {
     fn drop(&mut self) {
-        // Close our root lock before removing the directory. Descendants may still
-        // hold inherited copies after abnormal parent termination.
-        #[cfg(target_os = "linux")]
-        drop(self.root_lock.take());
+        let Some(dir) = self.dir.take() else {
+            return;
+        };
+        let path = dir.path().to_owned();
 
-        if let Some(dir) = self.dir.take() {
-            let path = dir.path().to_owned();
-            if let Err(err) = dir.close() {
-                tracing::debug!(
-                    path = %path.display(),
-                    %err,
-                    "failed to remove ephemeral build root during normal cleanup"
-                );
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+
+            // The owner and its descendants share one open-file-description lock.
+            // Releasing our copy does not necessarily release the last live lease.
+            // A *new* open-file-description is required to detect inherited holders.
+            drop(self.root_lock.take());
+            let probe = std::fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
+                .open(&path);
+            let leased = match probe.as_ref() {
+                Ok(file) => match crate::util::flock::try_lock_exclusive(file) {
+                    Ok(()) => false,
+                    Err(std::fs::TryLockError::WouldBlock) => true,
+                    Err(std::fs::TryLockError::Error(err)) => {
+                        tracing::debug!(path = %path.display(), %err,
+                            "cannot determine whether descendants still lease build root");
+                        true
+                    }
+                },
+                Err(err) => {
+                    tracing::debug!(path = %path.display(), %err,
+                        "cannot probe ephemeral root for descendant leases");
+                    true
+                }
+            };
+            if leased {
+                // Leave the published root for the ordinary abandoned-root reaper.
+                // Never delete a live descendant's working directory on Cargo exit.
+                let _ = dir.keep();
+                return;
             }
+
+            // Keep the fresh exclusive lock until recursive removal completes.
+            if let Err(err) = dir.close() {
+                tracing::debug!(path = %path.display(), %err,
+                    "failed to remove ephemeral build root during normal cleanup");
+            }
+        }
+
+        #[cfg(not(target_os = "linux"))]
+        if let Err(err) = dir.close() {
+            tracing::debug!(path = %path.display(), %err,
+                "failed to remove ephemeral build root during normal cleanup");
         }
     }
 }
@@ -434,6 +471,40 @@ impl Drop for EphemeralBuildRoot {
 #[cfg(all(test, target_os = "linux"))]
 mod ephemeral_build_root_tests {
     use super::EphemeralBuildRoot;
+
+    #[cfg(not(target_env = "musl"))]
+    #[test]
+    fn preserves_root_until_inherited_descendants_release_the_lease() {
+        let root = EphemeralBuildRoot::new().unwrap();
+        let path = root.path().to_path_buf();
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+
+        let inherited = std::fs::read_dir(format!("/proc/{}/fd", child.id()))
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter_map(|entry| std::fs::read_link(entry.path()).ok())
+            .any(|target| target == path);
+        if !inherited {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("test child did not inherit the root directory lease");
+        }
+
+        drop(root);
+        let survived_owner_exit = path.is_dir();
+        let _ = child.kill();
+        child.wait().unwrap();
+        assert!(
+            survived_owner_exit,
+            "Cargo must not remove a build root while descendants still own its lease"
+        );
+
+        super::GlobalContext::reap_abandoned_ephemeral_build_roots();
+        assert!(!path.exists(), "unleased build root should be reaped");
+    }
 
     #[test]
     fn holds_cleanup_lock_for_lifetime() {
