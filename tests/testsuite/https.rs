@@ -32,14 +32,15 @@ fn self_signed_should_fail() {
         )
         .file("src/lib.rs", "")
         .build();
-    // Git/libcurl versions disagree on the certificate failure's prefix,
-    // trust-store path, and explanation; preserve the TLS rejection assertion.
+    // Git/libcurl renders failures as 'certificate verification failed' or
+    // 'OpenSSL verify result: self-signed certificate'. Keep the certificate
+    // rejection assertion, not a version-specific diagnostic string.
     p.cargo("fetch")
         .with_status(101)
         .with_stderr_data(&format!(
             "\
 [UPDATING] git repository `https://127.0.0.1:[..]/repos/bar.git`
-fatal: unable to access 'https://127.0.0.1:[..]/repos/bar.git/': [..]certificate verification failed[..]
+fatal: unable to access 'https://127.0.0.1:[..]/repos/bar.git/': [..]certificate[..]
 [ERROR] failed to get `bar` as a dependency of package `foo v0.1.0 ([ROOT]/foo)`
 
 Caused by:
@@ -126,7 +127,7 @@ fn self_signed_with_cacert() {
         .with_status(101)
         .with_stderr_data(str![[r#"
 [UPDATING] git repository `https://127.0.0.1:[..]/repos/bar.git`
-fatal: unable to access 'https://127.0.0.1:[..]/repos/bar.git/': [..]certificate verification failed[..]
+fatal: unable to access 'https://127.0.0.1:[..]/repos/bar.git/': [..]certificate[..]
 [ERROR] failed to get `bar` as a dependency of package `foo v0.1.0 ([ROOT]/foo)`
 
 Caused by:
