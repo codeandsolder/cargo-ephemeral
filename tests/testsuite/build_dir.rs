@@ -324,6 +324,62 @@ fn ephemeral_intermediates_are_removed_after_build() {
 }
 
 #[cargo_test]
+#[cfg(target_os = "linux")]
+fn ephemeral_intermediates_reuse_paths_not_artifacts_across_builds() {
+    // Exercise actual Cargo build-script OUT_DIRs, not just the allocator
+    // helper: build scripts and native C++ source copies see this exact path.
+    let p = project()
+        .file(
+            "build.rs",
+            r#"
+fn main() {
+    let out_dir = std::env::var("OUT_DIR").unwrap();
+    let marker = std::path::Path::new(&out_dir).join("cargo-stale-probe");
+    println!(
+        "cargo:warning=ephemeral-out-dir={out_dir} stale={}",
+        marker.exists()
+    );
+    std::fs::write(marker, "previous run").unwrap();
+}
+"#,
+        )
+        .file("src/main.rs", "fn main() {}")
+        .build();
+    let temp = p.root().join("tmp");
+    temp.mkdir_p();
+
+    let build = || {
+        let output = p
+            .cargo("build")
+            .env("CARGO_BUILD_EPHEMERAL_INTERMEDIATES", "true")
+            .env("TMPDIR", &temp)
+            .run();
+        let stderr = std::str::from_utf8(&output.stderr).unwrap();
+        let warning = stderr
+            .lines()
+            .find_map(|line| line.split_once("ephemeral-out-dir=").map(|(_, tail)| tail))
+            .expect("build script must run and expose its actual OUT_DIR");
+        let (out_dir, stale) = warning
+            .split_once(" stale=")
+            .expect("build-script output should include marker state");
+        assert_eq!(stale.trim(), "false", "intermediates survived a prior run");
+        assert!(
+            !std::path::Path::new(out_dir).exists(),
+            "OUT_DIR was not removed"
+        );
+        assert!(std::fs::read_dir(&temp).unwrap().next().is_none());
+        out_dir.to_owned()
+    };
+
+    let first = build();
+    let second = build();
+    assert_eq!(
+        first, second,
+        "sequential builds should reuse physical paths"
+    );
+}
+
+#[cargo_test]
 #[cfg(all(target_os = "linux", not(target_env = "musl")))]
 #[expect(
     clippy::disallowed_methods,
