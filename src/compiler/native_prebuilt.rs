@@ -27,6 +27,7 @@ pub(super) struct NativePrebuiltProvider {
     package: String,
     version: String,
     source: String,
+    is_crates_io: bool,
     features: Vec<String>,
     target: String,
     profile: String,
@@ -79,7 +80,8 @@ impl NativePrebuiltProvider {
             executable: executable.to_os_string(),
             package: unit.pkg.name().to_string(),
             version: unit.pkg.version().to_string(),
-            source: id.source_id().to_string(),
+            source: id.source_id().as_url().to_string(),
+            is_crates_io: id.source_id().is_crates_io(),
             features: unit.features.iter().map(ToString::to_string).collect(),
             target: target.to_string(),
             profile: unit.profile.name.to_string(),
@@ -105,6 +107,7 @@ impl NativePrebuiltProvider {
             &self.package,
             &self.version,
             &self.source,
+            self.is_crates_io,
             &self.features,
             &self.target,
             &self.profile,
@@ -123,6 +126,10 @@ impl NativePrebuiltProvider {
             .env("CARGO_NATIVE_PREBUILT_PACKAGE", &self.package)
             .env("CARGO_NATIVE_PREBUILT_VERSION", &self.version)
             .env("CARGO_NATIVE_PREBUILT_SOURCE", &self.source)
+            .env(
+                "CARGO_NATIVE_PREBUILT_IS_CRATES_IO",
+                if self.is_crates_io { "1" } else { "0" },
+            )
             .env("CARGO_NATIVE_PREBUILT_FEATURES", self.features.join(","))
             .env("CARGO_NATIVE_PREBUILT_TARGET", &self.target)
             .env("CARGO_NATIVE_PREBUILT_PROFILE", &self.profile)

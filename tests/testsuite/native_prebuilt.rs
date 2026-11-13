@@ -43,7 +43,11 @@ test "$CARGO_NATIVE_PREBUILT_PACKAGE" = native-feature-probe
 test "$CARGO_NATIVE_PREBUILT_VERSION" = 0.1.0
 test "$CARGO_NATIVE_PREBUILT_PROFILE" = dev
 test -n "$CARGO_NATIVE_PREBUILT_TARGET"
-test -n "$CARGO_NATIVE_PREBUILT_SOURCE"
+case "$CARGO_NATIVE_PREBUILT_SOURCE" in
+    path+file://*) ;;
+    *) echo "incorrect noncanonical Cargo source ID: $CARGO_NATIVE_PREBUILT_SOURCE" >&2; exit 2 ;;
+esac
+test "$CARGO_NATIVE_PREBUILT_IS_CRATES_IO" = 0
 test -d "$CARGO_NATIVE_PREBUILT_CANONICAL_ROOT"
 printf '%s\n' "$CARGO_NATIVE_PREBUILT_FEATURES" >> "$CARGO_NATIVE_PREBUILT_WORKSPACE/provider-features.log"
 if [ "$NATIVE_PROVIDER_INVALID" = 1 ]; then

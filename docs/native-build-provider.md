@@ -13,7 +13,8 @@ sorted feature list, compilation target triple, profile, workspace root and
 declared SCCACHE_CANONICAL_TARGET_ROOT through these process env variables:
 
 * CARGO_NATIVE_PREBUILT_PACKAGE, CARGO_NATIVE_PREBUILT_VERSION,
-  CARGO_NATIVE_PREBUILT_SOURCE, CARGO_NATIVE_PREBUILT_FEATURES
+  CARGO_NATIVE_PREBUILT_SOURCE, CARGO_NATIVE_PREBUILT_IS_CRATES_IO,
+  CARGO_NATIVE_PREBUILT_FEATURES
 * CARGO_NATIVE_PREBUILT_TARGET, CARGO_NATIVE_PREBUILT_PROFILE,
   CARGO_NATIVE_PREBUILT_WORKSPACE, CARGO_NATIVE_PREBUILT_CANONICAL_ROOT
 
@@ -46,3 +47,8 @@ ambiguity, mismatched canonical roots, or missing/corrupted native package
 contents; it never guesses features from Cargo.lock. Its native static
 archives are built using a documented release configuration even when the Rust
 consumer uses a dev profile. No site-wide path override is required.
+
+Cargo supplies SourceId's machine-readable as_url() representation, not the
+human-readable Display string. IS_CRATES_IO is calculated using Cargo's own
+SourceId::is_crates_io predicate, including its handling of sparse indexes and
+documented index overrides; consumers must not guess from URL display names.
