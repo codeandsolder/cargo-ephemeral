@@ -354,6 +354,7 @@ fn build_work(build_runner: &mut BuildRunner<'_, '_>, unit: &Unit) -> CargoResul
         unit,
         bcx.ws.root(),
         bcx.target_data.short_name(&unit.kind),
+        bcx.gctx,
     )?;
 
     // Building the command to execute

@@ -6,6 +6,7 @@
 //! script. This avoids guessing features using Cargo.lock or workspace-wide
 //! environment overrides.
 use super::Unit;
+use crate::util::GlobalContext;
 use crate::util::errors::CargoResult;
 use anyhow::{Context as _, bail};
 use serde::Deserialize;
@@ -41,15 +42,21 @@ struct ProviderResponse {
 }
 
 impl NativePrebuiltProvider {
-    pub(super) fn select(unit: &Unit, workspace: &Path, target: &str) -> CargoResult<Option<Self>> {
-        if std::env::var_os(ACTIVE).is_some() {
+    pub(super) fn select(
+        unit: &Unit,
+        workspace: &Path,
+        target: &str,
+        gctx: &GlobalContext,
+    ) -> CargoResult<Option<Self>> {
+        if gctx.get_env_os(ACTIVE).is_some() {
             // Building a native package may itself invoke Cargo.
             return Ok(None);
         }
-        let Some(executable) = std::env::var_os(PROVIDER) else {
+        let Some(executable) = gctx.get_env_os(PROVIDER) else {
             return Ok(None);
         };
-        let packages = std::env::var(PACKAGES)
+        let packages = gctx
+            .get_env(PACKAGES)
             .with_context(|| format!("{PACKAGES} is required when {PROVIDER} is set"))?;
         if packages.split(',').any(|p| p.trim().is_empty()) {
             bail!("{PACKAGES} contains an empty package name");
@@ -60,7 +67,8 @@ impl NativePrebuiltProvider {
         {
             return Ok(None);
         }
-        let canonical_root = std::env::var_os(CANONICAL)
+        let canonical_root = gctx
+            .get_env_os(CANONICAL)
             .with_context(|| format!("{CANONICAL} must be declared for native prebuilts"))?;
         let canonical_root = PathBuf::from(canonical_root);
         if !canonical_root.is_absolute() {
@@ -68,7 +76,7 @@ impl NativePrebuiltProvider {
         }
         let id = unit.pkg.package_id();
         Ok(Some(Self {
-            executable,
+            executable: executable.to_os_string(),
             package: unit.pkg.name().to_string(),
             version: unit.pkg.version().to_string(),
             source: id.source_id().to_string(),
@@ -77,7 +85,7 @@ impl NativePrebuiltProvider {
             profile: unit.profile.name.to_string(),
             workspace: workspace.to_path_buf(),
             canonical_root,
-            revision: std::env::var_os(REVISION),
+            revision: gctx.get_env_os(REVISION).map(ToOwned::to_owned),
         }))
     }
 

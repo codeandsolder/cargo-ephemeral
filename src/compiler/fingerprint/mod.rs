@@ -1788,6 +1788,7 @@ See https://doc.rust-lang.org/cargo/reference/build-scripts.html#rerun-if-change
         unit,
         build_runner.bcx.ws.root(),
         build_runner.bcx.target_data.short_name(&unit.kind),
+        build_runner.bcx.gctx,
     )?
     .map(|provider| provider.fingerprint())
     .transpose()?
