@@ -2,7 +2,7 @@
 #![cfg(unix)]
 
 use crate::prelude::*;
-use cargo_test_support::project;
+use cargo_test_support::{project, str};
 use std::os::unix::fs::PermissionsExt;
 
 #[cargo_test]
@@ -89,6 +89,9 @@ fi
         .env("CARGO_NATIVE_PREBUILT_PROVIDER_REVISION", "invalid")
         .env("NATIVE_PROVIDER_INVALID", "1")
         .with_status(101)
+        .with_stderr_data(str![[r#"
+[..]native prebuilt provider returned invalid build-script environment name/value for "OUT_DIR"
+"#]])
         .run();
     assert_eq!(std::fs::read_to_string(&log).unwrap(), "\nalpha\nbeta\n\n");
 }
