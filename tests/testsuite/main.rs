@@ -142,6 +142,7 @@ mod metadata;
 mod min_publish_age;
 mod minimal_versions;
 mod multitarget;
+mod native_prebuilt;
 mod net_config;
 mod new;
 mod offline;

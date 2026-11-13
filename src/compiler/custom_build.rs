@@ -350,6 +350,12 @@ fn build_work(build_runner: &mut BuildRunner<'_, '_>, unit: &Unit) -> CargoResul
         prepare_metabuild(build_runner, build_script_unit, deps)?;
     }
 
+    let native_provider = super::native_prebuilt::NativePrebuiltProvider::select(
+        unit,
+        bcx.ws.root(),
+        bcx.target_data.short_name(&unit.kind),
+    )?;
+
     // Building the command to execute
     let bin_name = if bcx.gctx.cli_unstable().build_dir_new_layout {
         unit.target.crate_name()
@@ -593,6 +599,10 @@ fn build_work(build_runner: &mut BuildRunner<'_, '_>, unit: &Unit) -> CargoResul
                     host_target_root,
                 )?;
             }
+        }
+
+        if let Some(provider) = &native_provider {
+            provider.configure(&mut cmd)?;
         }
 
         // And now finally, run the build command itself!

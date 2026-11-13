@@ -43,6 +43,7 @@ pub(crate) mod layout;
 mod links;
 mod locking;
 mod lto;
+mod native_prebuilt;
 mod output_depinfo;
 mod output_sbom;
 pub mod rustdoc;

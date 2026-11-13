@@ -1784,6 +1784,14 @@ See https://doc.rust-lang.org/cargo/reference/build-scripts.html#rerun-if-change
     };
 
     let rustflags = unit.rustflags.to_vec();
+    let provider_config = super::native_prebuilt::NativePrebuiltProvider::select(
+        unit,
+        build_runner.bcx.ws.root(),
+        build_runner.bcx.target_data.short_name(&unit.kind),
+    )?
+    .map(|provider| provider.fingerprint())
+    .transpose()?
+    .unwrap_or(0);
 
     Ok(Fingerprint {
         local: Mutex::new(local),
@@ -1791,6 +1799,7 @@ See https://doc.rust-lang.org/cargo/reference/build-scripts.html#rerun-if-change
         deps,
         outputs: if overridden { Vec::new() } else { vec![output] },
         rustflags,
+        config: provider_config,
         index: build_runner.bcx.unit_to_index[unit],
 
         // Most of the other info is blank here as we don't really include it
