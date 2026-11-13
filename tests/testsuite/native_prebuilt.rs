@@ -90,7 +90,9 @@ fi
         .env("NATIVE_PROVIDER_INVALID", "1")
         .with_status(101)
         .with_stderr_data(str![[r#"
-[..]native prebuilt provider returned invalid build-script environment name/value for "OUT_DIR"
+[COMPILING] native-feature-probe v0.1.0 ([ROOT]/foo)
+[ERROR] native prebuilt provider returned invalid build-script environment name/value for "OUT_DIR"
+
 "#]])
         .run();
     assert_eq!(std::fs::read_to_string(&log).unwrap(), "\nalpha\nbeta\n\n");
