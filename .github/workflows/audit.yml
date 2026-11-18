@@ -12,6 +12,11 @@ on:
     branches:
     - master
 
+# Cancel superseded PR revisions while preserving independent event types.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   cargo_deny:
     if: github.repository == 'rust-lang/cargo'
