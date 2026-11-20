@@ -165,6 +165,50 @@ fn read_env_vars_for_config() {
     p.cargo("check").env("CARGO_BUILD_JOBS", "100").run();
 }
 
+#[cargo_test]
+fn managed_minimum_jobs() {
+    let p = project()
+        .file("src/lib.rs", "")
+        .file(".cargo/config.toml", "[build]\njobs = 2\n")
+        .file(
+            "build.rs",
+            r#"
+                fn main() {
+                    assert_eq!(
+                        std::env::var("NUM_JOBS").unwrap(),
+                        std::env::var("EXPECTED_JOBS").unwrap()
+                    );
+                    println!("cargo::rerun-if-env-changed=EXPECTED_JOBS");
+                    println!("cargo::rerun-if-env-changed=JOB_TEST_CASE");
+                }
+            "#,
+        )
+        .build();
+
+    for (case, (command, configured, minimum, expected)) in [
+        ("check", "", "12", "12"),
+        ("check", "3", "12", "12"),
+        ("check -j1", "24", "12", "12"),
+        ("check --jobs=24", "3", "12", "24"),
+        ("check --jobs=-2147483647", "", "12", "12"),
+        ("check -j2", "", "0", "2"),
+        ("check -j1", "", "16", "16"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut cargo = p.cargo(command);
+        cargo
+            .env("SCCACHE_MIN_JOBS", minimum)
+            .env("EXPECTED_JOBS", expected)
+            .env("JOB_TEST_CASE", case.to_string());
+        if !configured.is_empty() {
+            cargo.env("CARGO_BUILD_JOBS", configured);
+        }
+        cargo.run();
+    }
+}
+
 pub fn write_config_extless(config: &str) {
     write_config_at(paths::root().join(".cargo/config"), config);
 }

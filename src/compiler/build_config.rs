@@ -102,6 +102,22 @@ impl BuildConfig {
             },
         };
 
+        // Site launchers can establish a floor after Cargo resolves all job settings.
+        // An inherited jobserver remains authoritative for nested builds.
+        let jobs = if gctx.get_env_os("SCCACHE_MIN_JOBS").is_some() {
+            let minimum = gctx
+                .get_env("SCCACHE_MIN_JOBS")?
+                .parse::<u32>()
+                .context("SCCACHE_MIN_JOBS must be a non-negative integer")?;
+            if gctx.jobserver_from_env().is_none() {
+                jobs.max(minimum)
+            } else {
+                jobs
+            }
+        } else {
+            jobs
+        };
+
         // If sbom flag is set, it requires the unstable feature
         let sbom = match (cfg.sbom, gctx.cli_unstable().sbom) {
             (Some(sbom), true) => sbom,
