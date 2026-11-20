@@ -85,21 +85,42 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
       - run: rustup toolchain install 1.99.0 --profile minimal && rustup default 1.99.0
       - run: rustup component add clippy
+      - name: Setup mandatory sccache
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@6c75050a784dea5e37d28b094ce9ef3ef6c40829 # main
+
       - run: cargo clippy --workspace --all-targets --no-deps --keep-going
+
+      - name: Finalize mandatory sccache
+        if: always()
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@6c75050a784dea5e37d28b094ce9ef3ef6c40829 # main
 
   stale-label:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
       - run: rustup toolchain install 1.99.0 --profile minimal && rustup default 1.99.0
+      - name: Setup mandatory sccache
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@6c75050a784dea5e37d28b094ce9ef3ef6c40829 # main
+
       - run: cargo stale-label
+
+      - name: Finalize mandatory sccache
+        if: always()
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@6c75050a784dea5e37d28b094ce9ef3ef6c40829 # main
 
   lint-docs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
       - run: rustup toolchain install 1.99.0 --profile minimal && rustup default 1.99.0
+      - name: Setup mandatory sccache
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@6c75050a784dea5e37d28b094ce9ef3ef6c40829 # main
+
       - run: cargo lint-docs --check
+
+      - name: Finalize mandatory sccache
+        if: always()
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@6c75050a784dea5e37d28b094ce9ef3ef6c40829 # main
 
   # Ensure Cargo.lock is up-to-date
   lockfile:
@@ -126,7 +147,14 @@ jobs:
           curl -Lf https://github.com/obi1kenobi/cargo-semver-checks/releases/download/v0.51.0/cargo-semver-checks-x86_64-unknown-linux-gnu.tar.gz \
             | tar -xz --directory=./installed-bins
           echo `pwd`/installed-bins >> $GITHUB_PATH
+      - name: Setup mandatory sccache
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@6c75050a784dea5e37d28b094ce9ef3ef6c40829 # main
+
       - run: ci/validate-version-bump.sh
+
+      - name: Finalize mandatory sccache
+        if: always()
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@6c75050a784dea5e37d28b094ce9ef3ef6c40829 # main
 
   test:
     runs-on: ${{ matrix.os }}
@@ -190,6 +218,9 @@ jobs:
     - name: Check Windows GNU debugger tool
       run: gdb --version
       if: runner.os == 'Windows' && matrix.target_env == 'gnu'
+    - name: Setup mandatory sccache
+      uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@6c75050a784dea5e37d28b094ce9ef3ef6c40829 # main
+
     - name: Configure extra test environment
       run: echo CARGO_CONTAINER_TESTS=1 >> $GITHUB_ENV
       if: matrix.os == 'ubuntu-latest'
@@ -224,12 +255,23 @@ jobs:
     - name: Fetch smoke test
       run: ci/fetch-smoke-test.sh
 
+    - name: Finalize mandatory sccache
+      if: always()
+      uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@6c75050a784dea5e37d28b094ce9ef3ef6c40829 # main
+
   schema:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
     - run: rustup toolchain install 1.99.0 --profile minimal && rustup default 1.99.0
+    - name: Setup mandatory sccache
+      uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@6c75050a784dea5e37d28b094ce9ef3ef6c40829 # main
+
     - run: cargo test -p cargo-util-schemas -F unstable-schema
+
+    - name: Finalize mandatory sccache
+      if: always()
+      uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@6c75050a784dea5e37d28b094ce9ef3ef6c40829 # main
 
   # `cargo-util-schemas` is consumed by third-party tools, some of which run
   # on targets with no filesystem, environment, clock, or network.
@@ -239,14 +281,28 @@ jobs:
     - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
     - run: rustup update stable && rustup default stable
     - run: rustup target add wasm32-unknown-unknown
+    - name: Setup mandatory sccache
+      uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@6c75050a784dea5e37d28b094ce9ef3ef6c40829 # main
+
     - run: cargo check -p cargo-util-schemas --all-features --target wasm32-unknown-unknown
+
+    - name: Finalize mandatory sccache
+      if: always()
+      uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@6c75050a784dea5e37d28b094ce9ef3ef6c40829 # main
 
   resolver:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
     - run: rustup toolchain install 1.99.0 --profile minimal && rustup default 1.99.0
+    - name: Setup mandatory sccache
+      uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@6c75050a784dea5e37d28b094ce9ef3ef6c40829 # main
+
     - run: cargo test -p resolver-tests
+
+    - name: Finalize mandatory sccache
+      if: always()
+      uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@6c75050a784dea5e37d28b094ce9ef3ef6c40829 # main
 
   build_std:
     if: startsWith(github.ref, 'refs/tags/')
@@ -255,10 +311,17 @@ jobs:
     - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
     - run: rustup update nightly && rustup default nightly
     - run: rustup component add rust-src
+    - name: Setup mandatory sccache
+      uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@6c75050a784dea5e37d28b094ce9ef3ef6c40829 # main
+
     - run: cargo build
     - run: cargo test -p cargo --test build-std
       env:
         CARGO_RUN_BUILD_STD_TESTS: 1
+
+    - name: Finalize mandatory sccache
+      if: always()
+      uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@6c75050a784dea5e37d28b094ce9ef3ef6c40829 # main
   docs:
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
@@ -268,6 +331,9 @@ jobs:
     - run: rustup update stable
     - run: rustup component add rust-docs
     - run: rustup component add rustfmt --toolchain stable
+    - name: Setup mandatory sccache
+      uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@6c75050a784dea5e37d28b094ce9ef3ef6c40829 # main
+
     - run: ci/validate-man.sh
     # This requires rustfmt, use stable.
     - name: Run semver-check
@@ -288,6 +354,10 @@ jobs:
         curl -sSLO https://raw.githubusercontent.com/rust-lang/rust/master/src/tools/linkchecker/linkcheck.sh
         sh linkcheck.sh --all --path ../doc/book cargo
 
+    - name: Finalize mandatory sccache
+      if: always()
+      uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@6c75050a784dea5e37d28b094ce9ef3ef6c40829 # main
+
   msrv:
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
@@ -296,7 +366,14 @@ jobs:
     - uses: taiki-e/install-action@16b05812d776ae1dfaabc8277e421fb6d2506419  # v2.82.7
       with:
         tool: cargo-hack
+    - name: Setup mandatory sccache
+      uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@6c75050a784dea5e37d28b094ce9ef3ef6c40829 # main
+
     - run: cargo hack check --all-targets --rust-version --workspace --ignore-private --locked
+
+    - name: Finalize mandatory sccache
+      if: always()
+      uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@6c75050a784dea5e37d28b094ce9ef3ef6c40829 # main
 
   spellcheck:
     name: Spell Check with Typos
@@ -314,6 +391,9 @@ jobs:
     steps:
     - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
     - run: rustup update nightly && rustup default nightly
+    - name: Setup mandatory sccache
+      uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@6c75050a784dea5e37d28b094ce9ef3ef6c40829 # main
+
     - run: cargo build
     - name: Generate timing report for rustfix
       run: |
@@ -324,3 +404,7 @@ jobs:
         name: timing-report
         path: target/cargo-timings/*.html
         if-no-files-found: error
+
+    - name: Finalize mandatory sccache
+      if: always()
+      uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@6c75050a784dea5e37d28b094ce9ef3ef6c40829 # main

@@ -42,6 +42,9 @@ jobs:
           rustup toolchain install 1.99.0 --profile minimal
           rustup default 1.99.0
 
+      - name: Setup mandatory sccache
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@6c75050a784dea5e37d28b094ce9ef3ef6c40829 # main
+
       - name: Build portable Linux client
         shell: bash
         env:
@@ -74,3 +77,7 @@ jobs:
             --title "CI Cargo client ${{ steps.rev.outputs.sha }}" \
             --notes "Pinned Ubuntu 22.04-compatible Linux x86-64-v2 cargo-ephemeral binary for centrally managed CI." \
             dist/cargo-ephemeral-linux-x86_64 dist/SHA256SUMS dist/build.txt
+
+      - name: Finalize mandatory sccache
+        if: always()
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@6c75050a784dea5e37d28b094ce9ef3ef6c40829 # main
