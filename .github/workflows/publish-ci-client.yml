@@ -43,7 +43,7 @@ jobs:
           rustup default 1.99.0
 
       - name: Setup mandatory sccache
-        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@6c75050a784dea5e37d28b094ce9ef3ef6c40829 # main
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@9d478bdbfd4acd0e1a2c015d1ff1d11688eda572 # main
 
       - name: Build portable Linux client
         shell: bash
@@ -80,4 +80,4 @@ jobs:
 
       - name: Finalize mandatory sccache
         if: always()
-        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@6c75050a784dea5e37d28b094ce9ef3ef6c40829 # main
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@9d478bdbfd4acd0e1a2c015d1ff1d11688eda572 # main
