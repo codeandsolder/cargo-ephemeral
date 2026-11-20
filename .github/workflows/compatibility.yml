@@ -35,6 +35,9 @@ jobs:
           rustup toolchain install ${{ matrix.toolchain }} --profile minimal --component rustfmt
           rustup default ${{ matrix.toolchain }}
 
+      - name: Setup mandatory sccache
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@9d478bdbfd4acd0e1a2c015d1ff1d11688eda572 # main
+
       - name: Wrapper concurrency smoke
         run: ci/test-cargo-ephemeral-wrapper
 
@@ -42,6 +45,10 @@ jobs:
         run: |
           cargo build --bin cargo
           CARGO_TEST_DISABLE_NIGHTLY=1 cargo test --test testsuite registry_source_can_be_ephemeral
+
+      - name: Finalize mandatory sccache
+        if: always()
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@9d478bdbfd4acd0e1a2c015d1ff1d11688eda572 # main
 
   report:
     if: always()
