@@ -26,6 +26,14 @@ calling the real forked Cargo binary. The wrapper exports CARGO pointing back
 to itself so external subcommands such as cargo-clippy cannot bypass the same
 target/source policy when they recursively invoke Cargo.
 
+## Managed build concurrency
+
+When `SCCACHE_MIN_JOBS` is set, Cargo applies it as a non-negative floor to
+the resolved build job count (CLI, environment, config or CPU default).
+Higher values are preserved; zero disables the floor. Inherited jobservers
+remain authoritative to avoid creating extra tokens in nested builds.
+The sccache-deduplicated site launcher supplies a default of 12.
+
 ## Downstream maintenance contract
 
 Upstream wins on every unrelated behavior. The carried semantic invariant is:
