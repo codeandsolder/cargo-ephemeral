@@ -5477,9 +5477,8 @@ dependencies = [
 
 [[package]]
 name = "zlib-rs"
-version = "0.6.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "977347db8caa080403f6b6b7c1cda9479a8e869316f7e13a59b19076a40f94e3"
+version = "0.6.8"
+source = "git+https://github.com/codeandsolder/zlib-rs-fast.git?rev=3ffe503ac2261d625a1fa9a78999fedeb0cdfc92#3ffe503ac2261d625a1fa9a78999fedeb0cdfc92"
 
 [[package]]
 name = "zmij"
