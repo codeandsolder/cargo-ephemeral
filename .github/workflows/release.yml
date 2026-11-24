@@ -35,7 +35,7 @@ jobs:
         uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@9d478bdbfd4acd0e1a2c015d1ff1d11688eda572 # main
 
       - name: Publish Cargo to crates.io
-        run: ./publish.py
+        run: cargo publish-release
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
 
