@@ -1,6 +1,6 @@
 {
   "source": "rust-lang/cargo:master",
-  "lastAttempt": 1795776574294,
+  "lastAttempt": 1795776577323,
   "observations": [
     {
       "sha": "930a674da900a73c1dfbe16be62c42e75bdfdfc0",
@@ -17,6 +17,10 @@
     {
       "sha": "562527a53aa333eec76ba6207cfdb283de5c1129",
       "firstObserved": 1795690267852
+    },
+    {
+      "sha": "fdfd6a721e386bd3d3e84282c7ef3f6cba2a030e",
+      "firstObserved": 1795776577323
     }
   ]
 }
