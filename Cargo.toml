@@ -237,6 +237,7 @@ walkdir.workspace = true
 winnow.workspace = true
 
 [target.'cfg(unix)'.dependencies]
+sccache-build = { git = "https://github.com/codeandsolder/sccache-deduplicated.git", rev = "b34cdf7cce7f1bc298cd1e35e07e1c900c03f75c", default-features = false }
 libc.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]

@@ -44,7 +44,7 @@ use crate::util::machine_message::{self, Message};
 use crate::workspace::{PackageId, Target, profiles::ProfileRoot};
 use anyhow::{Context as _, bail};
 use cargo_platform::Cfg;
-use cargo_util::paths;
+use cargo_util::{ProcessBuilder, paths};
 use cargo_util_schemas::manifest::RustVersion;
 use std::collections::BTreeSet;
 use std::collections::hash_map::Entry;
@@ -329,7 +329,10 @@ fn emit_build_output(
 /// * Create the output dir (`OUT_DIR`) for the build script output.
 /// * Determine if the build script needs a re-run.
 /// * Run the build script and store its output.
-fn build_work(build_runner: &mut BuildRunner<'_, '_>, unit: &Unit) -> CargoResult<Job> {
+fn prepare_script_command(
+    build_runner: &BuildRunner<'_, '_>,
+    unit: &Unit,
+) -> CargoResult<(ProcessBuilder, PathBuf, PathBuf)> {
     assert!(unit.mode.is_run_custom_build());
     let bcx = &build_runner.bcx;
     let dependencies = build_runner.unit_deps(unit);
@@ -470,14 +473,19 @@ fn build_work(build_runner: &mut BuildRunner<'_, '_>, unit: &Unit) -> CargoResul
         cmd.display_env_vars();
     }
 
-    let any_build_script_metadata = bcx.gctx.cli_unstable().any_build_script_metadata;
+    Ok((cmd, script_dir, script_out_dir))
+}
 
-    // Gather the set of native dependencies that this package has along with
-    // some other variables to close over.
-    //
-    // This information will be used at build-time later on to figure out which
-    // sorts of variables need to be discovered at that time.
-    let lib_deps = dependencies
+type ScriptDependency = (
+    crate::util::interning::InternedString,
+    Option<String>,
+    PackageId,
+    UnitHash,
+);
+
+fn script_dependencies(build_runner: &BuildRunner<'_, '_>, unit: &Unit) -> Vec<ScriptDependency> {
+    build_runner
+        .unit_deps(unit)
         .iter()
         .filter_map(|dep| {
             if dep.unit.mode.is_run_custom_build() {
@@ -499,7 +507,57 @@ fn build_work(build_runner: &mut BuildRunner<'_, '_>, unit: &Unit) -> CargoResul
                 None
             }
         })
-        .collect::<Vec<_>>();
+        .collect()
+}
+
+fn apply_script_dependencies(
+    cmd: &mut ProcessBuilder,
+    outputs: &BuildScriptOutputs,
+    dependencies: Vec<ScriptDependency>,
+    any_build_script_metadata: bool,
+    build_scripts: Option<&BuildScripts>,
+    host_target_root: Option<&Path>,
+) -> CargoResult<()> {
+    for (name, links, dep_id, dep_metadata) in dependencies {
+        let output = outputs.get(dep_metadata).ok_or_else(|| {
+            internal(format!(
+                "failed to locate build state for env vars: {dep_id}/{dep_metadata}"
+            ))
+        })?;
+        for (key, value) in &output.metadata {
+            if let Some(ref links) = links {
+                cmd.env(
+                    &format!("DEP_{}_{}", super::envify(links), super::envify(key)),
+                    value,
+                );
+            }
+            if any_build_script_metadata {
+                cmd.env(
+                    &format!("CARGO_DEP_{}_{}", super::envify(&name), super::envify(key)),
+                    value,
+                );
+            }
+        }
+    }
+    if let Some(build_scripts) = build_scripts
+        && let Some(root) = host_target_root
+    {
+        super::add_plugin_deps(cmd, outputs, build_scripts, root)?;
+    }
+    Ok(())
+}
+
+fn build_work(build_runner: &mut BuildRunner<'_, '_>, unit: &Unit) -> CargoResult<Job> {
+    let bcx = &build_runner.bcx;
+    let (mut cmd, script_dir, script_out_dir) = prepare_script_command(build_runner, unit)?;
+    let any_build_script_metadata = bcx.gctx.cli_unstable().any_build_script_metadata;
+
+    // Gather the set of native dependencies that this package has along with
+    // some other variables to close over.
+    //
+    // This information will be used at build-time later on to figure out which
+    // sorts of variables need to be discovered at that time.
+    let lib_deps = script_dependencies(build_runner, unit);
     let library_name = unit.pkg.library().map(|t| t.crate_name());
     let pkg_descr = unit.pkg.to_string();
     let build_script_outputs = Arc::clone(&build_runner.build_script_outputs);
@@ -558,42 +616,14 @@ fn build_work(build_runner: &mut BuildRunner<'_, '_>, unit: &Unit) -> CargoResul
         // along to this custom build command. We're also careful to augment our
         // dynamic library search path in case the build script depended on any
         // native dynamic libraries.
-        {
-            let build_script_outputs = build_script_outputs.lock().unwrap();
-            for (name, links, dep_id, dep_metadata) in lib_deps {
-                let script_output = build_script_outputs.get(dep_metadata).ok_or_else(|| {
-                    internal(format!(
-                        "failed to locate build state for env vars: {}/{}",
-                        dep_id, dep_metadata
-                    ))
-                })?;
-                let data = &script_output.metadata;
-                for (key, value) in data.iter() {
-                    if let Some(ref links) = links {
-                        cmd.env(
-                            &format!("DEP_{}_{}", super::envify(&links), super::envify(key)),
-                            value,
-                        );
-                    }
-                    if any_build_script_metadata {
-                        cmd.env(
-                            &format!("CARGO_DEP_{}_{}", super::envify(&name), super::envify(key)),
-                            value,
-                        );
-                    }
-                }
-            }
-            if let Some(build_scripts) = build_scripts
-                && let Some(ref host_target_root) = host_target_root
-            {
-                super::add_plugin_deps(
-                    &mut cmd,
-                    &build_script_outputs,
-                    &build_scripts,
-                    host_target_root,
-                )?;
-            }
-        }
+        apply_script_dependencies(
+            &mut cmd,
+            &build_script_outputs.lock().unwrap(),
+            lib_deps,
+            any_build_script_metadata,
+            build_scripts.as_deref(),
+            host_target_root.as_deref(),
+        )?;
 
         // And now finally, run the build command itself!
         state.running(&cmd);
@@ -1331,7 +1361,7 @@ pub fn build_map(build_runner: &mut BuildRunner<'_, '_>) -> CargoResult<()> {
             }
         }
 
-        if unit.mode.is_run_custom_build() {
+        if unit.mode.is_run_custom_build() && !build_runner.bcx.build_config.native_build_plan {
             parse_previous_explicit_deps(build_runner, unit);
         }
 
@@ -1481,4 +1511,97 @@ impl BuildScriptRunFiles {
             root_output,
         }
     }
+}
+
+#[cfg(unix)]
+pub(super) fn plan_script(
+    runner: &BuildRunner<'_, '_>,
+    unit: &Unit,
+) -> CargoResult<Option<(ProcessBuilder, PathBuf, PathBuf)>> {
+    let metadata = runner.get_run_build_script_metadata(unit);
+    let outputs = runner.build_script_outputs.lock().unwrap();
+    if outputs.contains_key(metadata) {
+        return Ok(None);
+    }
+    let (mut cmd, script_dir, out_dir) = prepare_script_command(runner, unit)?;
+    let files = BuildScriptRunFiles::for_unit(runner, unit);
+    paths::create_dir_all(&script_dir)?;
+    paths::create_dir_all(&out_dir)?;
+    paths::create_dir_all(&files.root)?;
+    apply_script_dependencies(
+        &mut cmd,
+        &outputs,
+        script_dependencies(runner, unit),
+        runner.bcx.gctx.cli_unstable().any_build_script_metadata,
+        runner.build_scripts.get(unit).map(Arc::as_ref),
+        runner.files().host_dest(),
+    )?;
+    Ok(Some((cmd, files.stdout, files.stderr)))
+}
+
+#[cfg(unix)]
+pub(super) fn plan_script_outputs(runner: &BuildRunner<'_, '_>, unit: &Unit) -> Vec<PathBuf> {
+    if runner
+        .build_script_outputs
+        .lock()
+        .unwrap()
+        .contains_key(runner.get_run_build_script_metadata(unit))
+    {
+        return Vec::new();
+    }
+    let files = BuildScriptRunFiles::for_unit(runner, unit);
+    vec![files.stdout, files.stderr]
+}
+
+#[cfg(unix)]
+pub(super) fn complete_script(runner: &BuildRunner<'_, '_>, unit: &Unit) -> CargoResult<()> {
+    let metadata = runner.get_run_build_script_metadata(unit);
+    if runner
+        .build_script_outputs
+        .lock()
+        .unwrap()
+        .contains_key(metadata)
+    {
+        return Ok(());
+    }
+    let out_dir = if runner.bcx.gctx.cli_unstable().build_dir_new_layout {
+        runner.files().out_dir_new_layout(unit)
+    } else {
+        runner.files().build_script_out_dir(unit)
+    };
+    let files = BuildScriptRunFiles::for_unit(runner, unit);
+    let output = BuildOutput::parse_file(
+        &files.stdout,
+        unit.pkg.library().map(|t| t.crate_name()),
+        &unit.pkg.to_string(),
+        &out_dir,
+        &out_dir,
+        runner.bcx.gctx.nightly_features_allowed,
+        unit.pkg.targets(),
+        &unit.pkg.rust_version().cloned(),
+    )?;
+    for (severity, message) in &output.log_messages {
+        match severity {
+            Severity::Warning => runner.bcx.gctx.shell().warn(message)?,
+            Severity::Error => bail!("build script for {}: {message}", unit.pkg),
+        }
+    }
+    paths::write(&files.root_output, paths::path2bytes(&out_dir)?)?;
+    runner
+        .build_script_outputs
+        .lock()
+        .unwrap()
+        .insert(unit.pkg.package_id(), metadata, output);
+    Ok(())
+}
+
+#[cfg(unix)]
+pub(super) fn plan_metabuild(runner: &BuildRunner<'_, '_>, unit: &Unit) -> CargoResult<()> {
+    if unit.target.is_custom_build()
+        && !unit.mode.is_run_custom_build()
+        && let Some(deps) = unit.pkg.manifest().metabuild()
+    {
+        prepare_metabuild(runner, unit, deps)?;
+    }
+    Ok(())
 }

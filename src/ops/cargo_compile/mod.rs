@@ -165,6 +165,22 @@ fn compile_ws<'a>(
     options: &CompileOptions,
     exec: &Arc<dyn Executor>,
 ) -> CargoResult<Compilation<'a>> {
+    if options.build_config.native_build_plan {
+        let config = &options.build_config;
+        anyhow::ensure!(
+            matches!(
+                config.intent,
+                crate::compiler::UserIntent::Build | crate::compiler::UserIntent::Check { .. }
+            ) && !config.emit_json()
+                && !config.keep_going
+                && !config.dry_run
+                && !config.sbom
+                && !config.timing_report
+                && !config.future_incompat_report,
+            "native build planner supports build/check without Cargo-specific reports or keep-going"
+        );
+        anyhow::ensure!(cfg!(unix), "native build planner requires Unix");
+    }
     let interner = UnitInterner::new();
     let logger = BuildLogger::maybe_new(ws, &options.build_config)?;
 
@@ -200,6 +216,10 @@ fn compile_ws<'a>(
     if options.build_config.unit_graph {
         unit_graph::emit_serialized_unit_graph(&bcx.roots, &bcx.unit_graph, ws.gctx())?;
         return Compilation::new(&bcx);
+    }
+    #[cfg(unix)]
+    if options.build_config.native_build_plan {
+        return BuildRunner::new(&bcx)?.serve_native_plan();
     }
     crate::workspace::gc::auto_gc(bcx.gctx);
     let build_runner = BuildRunner::new(&bcx)?;

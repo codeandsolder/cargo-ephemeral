@@ -416,6 +416,14 @@ pub trait CommandExt: Sized {
             flag("unit-graph", "Output build graph in JSON (unstable)")
                 .help_heading(heading::COMPILATION_OPTIONS),
         )
+        ._arg(
+            flag(
+                "native-build-plan",
+                "Serve the sccache native build planner protocol",
+            )
+            .conflicts_with("unit-graph")
+            .help_heading(heading::COMPILATION_OPTIONS),
+        )
     }
 
     fn arg_new_opts(self) -> Self {
@@ -828,6 +836,7 @@ Run `{cmd}` to see possible targets."
         build_config.requested_profile =
             self.get_profile_name(default_profile, profile_checking)?;
         build_config.unit_graph = self.flag("unit-graph");
+        build_config.native_build_plan = self.flag("native-build-plan");
         build_config.future_incompat_report = self.flag("future-incompat-report");
         build_config.compile_time_deps_only = self.flag("compile-time-deps");
         build_config.timing_report = self.flag("timings");

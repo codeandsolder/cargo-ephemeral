@@ -43,6 +43,8 @@ pub(crate) mod layout;
 mod links;
 mod locking;
 mod lto;
+#[cfg(unix)]
+mod native_plan;
 mod output_depinfo;
 mod output_sbom;
 pub mod rustdoc;
@@ -586,75 +588,74 @@ fn rustc(
 
         Ok(())
     }));
+}
 
-    // Add all relevant `-L` and `-l` flags from dependencies (now calculated and
-    // present in `state`) to the command provided.
-    fn add_native_deps(
-        rustc: &mut ProcessBuilder,
-        build_script_outputs: &BuildScriptOutputs,
-        build_scripts: &BuildScripts,
-        pass_l_flag: bool,
-        target: &Target,
-        current_id: PackageId,
-        mode: CompileMode,
-    ) -> CargoResult<()> {
-        let mut library_paths = vec![];
+// Add all relevant `-L` and `-l` flags from dependencies (now calculated and
+// present in `state`) to the command provided.
+fn add_native_deps(
+    rustc: &mut ProcessBuilder,
+    build_script_outputs: &BuildScriptOutputs,
+    build_scripts: &BuildScripts,
+    pass_l_flag: bool,
+    target: &Target,
+    current_id: PackageId,
+    mode: CompileMode,
+) -> CargoResult<()> {
+    let mut library_paths = vec![];
 
-        for key in build_scripts.to_link.iter() {
-            let output = build_script_outputs.get(key.1).ok_or_else(|| {
-                internal(format!(
-                    "couldn't find build script output for {}/{}",
-                    key.0, key.1
-                ))
-            })?;
-            library_paths.extend(output.library_paths.iter());
-        }
-
-        // NOTE: This very intentionally does not use the derived ord from LibraryPath because we need to
-        // retain relative ordering within the same type (i.e. not lexicographic). The use of a stable sort
-        // is also important here because it ensures that paths of the same type retain the same relative
-        // ordering (for an unstable sort to work here, the list would need to retain the idx of each element
-        // and then sort by that idx when the type is equivalent.
-        library_paths.sort_by_key(|p| match p {
-            LibraryPath::CargoArtifact(_) => 0,
-            LibraryPath::External(_) => 1,
-        });
-
-        for path in library_paths.iter() {
-            rustc.arg("-L").arg(path.as_ref());
-        }
-
-        for key in build_scripts.to_link.iter() {
-            let output = build_script_outputs.get(key.1).ok_or_else(|| {
-                internal(format!(
-                    "couldn't find build script output for {}/{}",
-                    key.0, key.1
-                ))
-            })?;
-
-            if key.0 == current_id {
-                if pass_l_flag {
-                    for name in output.library_links.iter() {
-                        rustc.arg("-l").arg(name);
-                    }
-                }
-            }
-
-            for (lt, arg) in &output.linker_args {
-                // There was an unintentional change where cdylibs were
-                // allowed to be passed via transitive dependencies. This
-                // clause should have been kept in the `if` block above. For
-                // now, continue allowing it for cdylib only.
-                // See https://github.com/rust-lang/cargo/issues/9562
-                if lt.applies_to(target, mode)
-                    && (key.0 == current_id || *lt == LinkArgTarget::Cdylib)
-                {
-                    rustc.arg("-C").arg(format!("link-arg={}", arg));
-                }
-            }
-        }
-        Ok(())
+    for key in build_scripts.to_link.iter() {
+        let output = build_script_outputs.get(key.1).ok_or_else(|| {
+            internal(format!(
+                "couldn't find build script output for {}/{}",
+                key.0, key.1
+            ))
+        })?;
+        library_paths.extend(output.library_paths.iter());
     }
+
+    // NOTE: This very intentionally does not use the derived ord from LibraryPath because we need to
+    // retain relative ordering within the same type (i.e. not lexicographic). The use of a stable sort
+    // is also important here because it ensures that paths of the same type retain the same relative
+    // ordering (for an unstable sort to work here, the list would need to retain the idx of each element
+    // and then sort by that idx when the type is equivalent.
+    library_paths.sort_by_key(|p| match p {
+        LibraryPath::CargoArtifact(_) => 0,
+        LibraryPath::External(_) => 1,
+    });
+
+    for path in library_paths.iter() {
+        rustc.arg("-L").arg(path.as_ref());
+    }
+
+    for key in build_scripts.to_link.iter() {
+        let output = build_script_outputs.get(key.1).ok_or_else(|| {
+            internal(format!(
+                "couldn't find build script output for {}/{}",
+                key.0, key.1
+            ))
+        })?;
+
+        if key.0 == current_id {
+            if pass_l_flag {
+                for name in output.library_links.iter() {
+                    rustc.arg("-l").arg(name);
+                }
+            }
+        }
+
+        for (lt, arg) in &output.linker_args {
+            // There was an unintentional change where cdylibs were
+            // allowed to be passed via transitive dependencies. This
+            // clause should have been kept in the `if` block above. For
+            // now, continue allowing it for cdylib only.
+            // See https://github.com/rust-lang/cargo/issues/9562
+            if lt.applies_to(target, mode) && (key.0 == current_id || *lt == LinkArgTarget::Cdylib)
+            {
+                rustc.arg("-C").arg(format!("link-arg={}", arg));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn verbose_if_simple_exit_code(err: Error) -> Error {

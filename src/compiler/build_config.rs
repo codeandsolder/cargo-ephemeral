@@ -29,6 +29,8 @@ pub struct BuildConfig {
     pub force_rebuild: bool,
     /// Output the unit graph to stdout instead of actually compiling.
     pub unit_graph: bool,
+    /// Serve the external build executor instead of scheduling local jobs.
+    pub native_build_plan: bool,
     /// `true` to avoid really compiling.
     pub dry_run: bool,
     /// An optional override of the rustc process for primary units
@@ -138,6 +140,7 @@ impl BuildConfig {
             message_format: MessageFormat::Human,
             force_rebuild: false,
             unit_graph: false,
+            native_build_plan: false,
             dry_run: false,
             primary_unit_rustc: None,
             rustfix_diagnostic_server: Rc::new(RefCell::new(None)),

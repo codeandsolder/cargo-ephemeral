@@ -159,6 +159,31 @@ impl<'a, 'gctx> BuildRunner<'a, 'gctx> {
         Ok(self.compilation)
     }
 
+    fn prepare_build(&mut self) -> CargoResult<()> {
+        self.lto = super::lto::generate(self.bcx)?;
+        self.prepare_units()?;
+        self.prepare()?;
+        custom_build::build_map(self)?;
+        self.check_collisions()?;
+        self.compute_metadata_for_doc_units();
+        Ok(())
+    }
+
+    /// Keep Cargo's source/layout locks for the external executor's lifetime.
+    #[cfg(unix)]
+    pub(crate) fn serve_native_plan(mut self) -> CargoResult<Compilation<'gctx>> {
+        let _lock = self
+            .bcx
+            .gctx
+            .acquire_package_cache_lock(CacheLockMode::Shared)?;
+        self.prepare_build()?;
+        super::native_plan::serve(&self)?;
+        for unit in &self.bcx.roots {
+            self.collect_tests_and_executables(unit)?;
+        }
+        Ok(self.compilation)
+    }
+
     /// Starts compilation, waits for it to finish, and returns information
     /// about the result of compilation.
     ///
@@ -175,12 +200,7 @@ impl<'a, 'gctx> BuildRunner<'a, 'gctx> {
             .gctx
             .acquire_package_cache_lock(CacheLockMode::Shared)?;
         let mut queue = JobQueue::new(self.bcx);
-        self.lto = super::lto::generate(self.bcx)?;
-        self.prepare_units()?;
-        self.prepare()?;
-        custom_build::build_map(&mut self)?;
-        self.check_collisions()?;
-        self.compute_metadata_for_doc_units();
+        self.prepare_build()?;
 
         // We need to make sure that if there were any previous docs already compiled,
         // they were compiled with the same Rustc version that we're currently using.
