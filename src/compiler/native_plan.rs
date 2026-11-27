@@ -117,6 +117,13 @@ fn prepare(runner: &BuildRunner<'_, '_>, unit: &Unit) -> CargoResult<PlanAction>
     if unit.skip_non_compile_time_dep {
         return Ok(PlanAction::Noop);
     }
+    // Native execution does not produce Cargo's mtime-based fingerprint.
+    // Invalidate any prior Cargo freshness claim before modifying this unit,
+    // including failed actions, so a later normal Cargo build cannot reuse it.
+    let fingerprint = runner.files().fingerprint_file_path(unit, "");
+    if fingerprint.exists() {
+        paths::remove_file(&fingerprint)?;
+    }
     let cwd = runner.bcx.gctx.cwd();
     if unit.mode.is_run_custom_build() {
         let Some((cmd, stdout, stderr)) = custom_build::plan_script(runner, unit)? else {
@@ -174,20 +181,8 @@ fn complete(runner: &BuildRunner<'_, '_>, unit: &Unit) -> CargoResult<()> {
     if unit.mode.is_run_custom_build() {
         return custom_build::complete_script(runner, unit);
     }
-    for output in runner.outputs(unit)?.iter() {
-        if !output.path.exists() {
-            continue;
-        }
-        if let Some(dst) = &output.hardlink {
-            paths::link_or_copy(&output.path, dst)?;
-            if let Some(dst) = &output.export_path {
-                if let Some(parent) = dst.parent() {
-                    paths::create_dir_all(parent)?;
-                }
-                paths::link_or_copy(&output.path, dst)?;
-            }
-        }
-    }
+    let outputs = runner.outputs(unit)?;
+    super::materialize_outputs(&outputs, runner.files().export_dir().as_deref())?;
     Ok(())
 }
 
@@ -209,6 +204,10 @@ pub(super) fn serve(runner: &BuildRunner<'_, '_>) -> CargoResult<()> {
         ensure!(
             !unit.mode.is_doc() && !unit.mode.is_doc_test() && !unit.mode.is_doc_scrape(),
             "documentation units are not supported"
+        );
+        ensure!(
+            !unit.profile.incremental,
+            "native planner requires nonincremental profiles"
         );
         ensure!(
             unit.profile.trim_paths.is_none(),

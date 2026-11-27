@@ -685,6 +685,36 @@ fn downgrade_lock_to_shared(lock: LockKey) -> Work {
     })
 }
 
+/// Publish final artifacts using the same rules in both execution engines.
+fn materialize_outputs(
+    outputs: &[build_runner::OutputFile],
+    export_dir: Option<&Path>,
+) -> CargoResult<Vec<PathBuf>> {
+    let mut destinations = vec![];
+    for output in outputs.iter() {
+        let src = &output.path;
+        // This may have been a `cargo rustc` command which changes the
+        // output, so the source may not actually exist.
+        if !src.exists() {
+            continue;
+        }
+        let Some(dst) = output.hardlink.as_ref() else {
+            destinations.push(src.clone());
+            continue;
+        };
+        destinations.push(dst.clone());
+        paths::link_or_copy(src, dst)?;
+        if let Some(ref path) = output.export_path {
+            let export_dir = export_dir.context("missing export directory")?;
+            paths::create_dir_all(export_dir)?;
+
+            paths::link_or_copy(src, path)?;
+        }
+    }
+
+    Ok(destinations)
+}
+
 /// Link the compiled target (often of form `foo-{metadata_hash}`) to the
 /// final target. This must happen during both "Fresh" and "Compile".
 fn link_targets(
@@ -717,27 +747,7 @@ fn link_targets(
         // hard link our outputs out of the `deps` directory into the directory
         // above. This means that `cargo build` will produce binaries in
         // `target/debug` which one probably expects.
-        let mut destinations = vec![];
-        for output in outputs.iter() {
-            let src = &output.path;
-            // This may have been a `cargo rustc` command which changes the
-            // output, so the source may not actually exist.
-            if !src.exists() {
-                continue;
-            }
-            let Some(dst) = output.hardlink.as_ref() else {
-                destinations.push(src.clone());
-                continue;
-            };
-            destinations.push(dst.clone());
-            paths::link_or_copy(src, dst)?;
-            if let Some(ref path) = output.export_path {
-                let export_dir = export_dir.as_ref().unwrap();
-                paths::create_dir_all(export_dir)?;
-
-                paths::link_or_copy(src, path)?;
-            }
-        }
+        let destinations = materialize_outputs(&outputs, export_dir.as_deref())?;
 
         if json_messages {
             let debuginfo = match profile.debuginfo.into_inner() {
