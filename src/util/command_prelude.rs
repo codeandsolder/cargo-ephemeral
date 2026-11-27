@@ -416,7 +416,10 @@ pub trait CommandExt: Sized {
             flag("unit-graph", "Output build graph in JSON (unstable)")
                 .help_heading(heading::COMPILATION_OPTIONS),
         )
-        ._arg(
+    }
+
+    fn arg_native_build_plan(self) -> Self {
+        self._arg(
             flag(
                 "native-build-plan",
                 "Serve the sccache native build planner protocol",

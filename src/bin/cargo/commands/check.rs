@@ -34,6 +34,7 @@ pub fn cli() -> Command {
         .arg_target_tuple("Check for the target tuple")
         .arg_target_dir()
         .arg_unit_graph()
+        .arg_native_build_plan()
         .arg_timings()
         .arg_compile_time_deps()
         .arg_manifest_path()
