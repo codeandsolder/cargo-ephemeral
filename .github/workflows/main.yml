@@ -237,6 +237,9 @@ jobs:
       env:
         __CARGO_TEST_FORCE_ARGFILE: 1
     - run: cargo test --workspace --exclude cargo --exclude benchsuite --exclude resolver-tests
+    - name: Review release publication plan
+      if: matrix.os == 'ubuntu-latest' && (matrix.rust == 'stable' || matrix.rust == '1.99.0')
+      run: cargo publish-release --dry-run
     - run: cargo test -p build-rs -F unstable
       if: startsWith(matrix.rust, 'nightly')
     - run: cargo test -p build-rs-test-lib -F unstable
