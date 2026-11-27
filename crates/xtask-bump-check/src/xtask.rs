@@ -130,7 +130,7 @@ fn bump_check(args: &clap::ArgMatches, gctx: &cargo::util::GlobalContext) -> Car
         "cargo",
         // Don't check against beta and stable branches,
         // as the publish of these crates are not tied with Rust release process.
-        // See `TO_PUBLISH` in publish.py.
+        // See `TO_PUBLISH` in crates/xtask-publish/src/main.rs.
         "home",
     ];
     // Skip both the version-bump check and SemVer checks entirely.

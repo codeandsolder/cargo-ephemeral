@@ -5388,6 +5388,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "xtask-publish"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "curl",
+ "semver",
+ "toml_edit",
+]
+
+[[package]]
 name = "xtask-spellcheck"
 version = "0.0.0"
 dependencies = [

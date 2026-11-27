@@ -133,8 +133,12 @@ team]. The release process involves a series of steps:
 
 1. The Release team's automation scripts (see <https://github.com/rust-lang/simpleinfra/>) will run [`promote-release`] which will create a tag in the `rust-lang/cargo` repository associated with the version of the cargo submodule for that release.
 2. The creation of a tag will trigger the [release workflow] in `rust-lang/cargo`.
-3. The release workflow will run the [`publish.py` script] on the commit associated with the tag.
-4. The `publish.py` script will run `cargo publish` on any crates that are not already published.
+3. The release workflow will run [`cargo publish-release`] on the commit associated with the tag.
+4. The `cargo publish-release` command will run `cargo publish` on any crates that are not already published.
+
+To review the ordered publication plan without uploading crates, run
+`cargo publish-release --dry-run` from the repository root. The command checks
+the current registry state and reports which packages would be published.
 
 [`promote-release`]: https://github.com/rust-lang/promote-release
 [release workflow]: https://github.com/rust-lang/cargo/blob/master/.github/workflows/release.yml
@@ -158,7 +162,7 @@ permissions (currently [@ehuss] or the Release/Infra team)[^fix-manual-release].
 [^fix-manual-release]: This should be fixed, see [crate ownership policy](https://forge.rust-lang.org/policies/crate-ownership.html) about removing ownership. Also see <https://github.com/rust-lang/cargo/issues/14538> for problems with tagging. In general, these should be published from GitHub Actions, but we don't have the infrastructure set up for that, yet.
 
 [`home`]: https://github.com/rust-lang/cargo/tree/master/crates/home
-[`publish.py` script]: https://github.com/rust-lang/cargo/blob/master/publish.py
+[`cargo publish-release`]: https://github.com/codeandsolder/cargo-ephemeral/blob/master/crates/xtask-publish/src/main.rs
 
 ## Beta backports
 

@@ -11,12 +11,11 @@ permissions:
 
 jobs:
   sync:
-    uses: codeandsolder/ci-workflows/.github/workflows/upstream-tracking.yml@1c9f5c8968c4caf8754c98ebeb0889d9e774b5ed # main
+    uses: codeandsolder/ci-workflows/.github/workflows/upstream-tracking.yml@c9cff3b64df2fb2295270a09e8e38dbf18e31daf # main
     with:
       upstream-repository: rust-lang/cargo
       upstream-branch: master
       target-branch: master
-      strategy: squash-rebase
       workflow-policy: preserve
       rust-toolchain: "1.99.0"
       cargo-artifact: true

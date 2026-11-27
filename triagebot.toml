@@ -180,7 +180,6 @@ trigger_files = [
   "clippy.toml",
   "crates/xtask-",
   "deny.toml",
-  "publish.py",
   "triagebot.toml",
 ]
 

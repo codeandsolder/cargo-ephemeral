@@ -25,7 +25,7 @@ If its an xtask,
 - Mark `package.publish = false`
 
 If needed to be published with `cargo`,
-add the package to `publish.py` in the repo root,
+add the package to `TO_PUBLISH` in `crates/xtask-publish/src/main.rs`,
 in dependency order.
 
 > [!NOTE]
