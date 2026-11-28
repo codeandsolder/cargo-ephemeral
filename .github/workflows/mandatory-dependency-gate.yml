@@ -1,0 +1,17 @@
+name: Mandatory dependency consolidation
+on:
+  pull_request:
+  push:
+    branches: [master]
+  merge_group:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  dependency-gate:
+    uses: codeandsolder/ci-workflows/.github/workflows/rust-dependency-gate.yml@1ef8b180d04fbeb8c095e8d701f8a5107472370e # main
+    with:
+      working-directories: '["."]'
